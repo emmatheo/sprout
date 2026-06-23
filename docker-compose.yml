@@ -1,0 +1,11 @@
+services:
+  db:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: sprout
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sprout
+    volumes:
+      - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql

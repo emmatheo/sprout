@@ -1,0 +1,17 @@
+node_modules/
+.next/
+dist/
+build/
+.env
+.env.local
+env.local
+tsc_output.txt
+tsc_output_2.txt
+tsc_output_3.txt
+tsconfig.tsbuildinfo
+*.log
+.DS_Store
+contracts/build/
+backend/dist/
+frontend/.env.local
+frontend/env.local
