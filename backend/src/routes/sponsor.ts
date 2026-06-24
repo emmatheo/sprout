@@ -6,8 +6,13 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const router = Router();
+const enokiApiKey = process.env.ENOKI_SECRET_API_KEY;
+if (!enokiApiKey) {
+  console.warn('WARNING: ENOKI_SECRET_API_KEY is not set. Sponsorship will not work.');
+}
+
 const enoki = new EnokiClient({
-  apiKey: process.env.ENOKI_SECRET_API_KEY!,
+  apiKey: enokiApiKey || 'placeholder-for-no-key-mode',
 });
 
 const PACKAGE_ID = process.env.SPROUT_PACKAGE_ID!;

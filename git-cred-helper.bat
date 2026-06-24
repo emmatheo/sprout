@@ -1,0 +1,3 @@
+@echo off
+echo username=emmatheo
+echo password=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
