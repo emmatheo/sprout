@@ -1,0 +1,48 @@
+   Γû▓ Next.js 15.5.19
+
+   Creating an optimized production build ...
+ ΓÜá Compiled with warnings in 3.6s
+
+./lib/suiClient.ts
+Attempted import error: 'getFullnodeUrl' is not exported from '@mysten/sui/client' (imported as 'getFullnodeUrl').
+
+Import trace for requested module:
+./lib/suiClient.ts
+./app/providers.tsx
+
+./lib/suiClient.ts
+Attempted import error: 'SuiClient' is not exported from '@mysten/sui/client' (imported as 'SuiClient').
+
+Import trace for requested module:
+./lib/suiClient.ts
+./app/providers.tsx
+
+ ΓÜá Compiled with warnings in 2.7s
+
+./lib/suiClient.ts
+Attempted import error: 'getFullnodeUrl' is not exported from '@mysten/sui/client' (imported as 'getFullnodeUrl').
+
+Import trace for requested module:
+./lib/suiClient.ts
+./app/providers.tsx
+
+./lib/suiClient.ts
+Attempted import error: 'SuiClient' is not exported from '@mysten/sui/client' (imported as 'SuiClient').
+
+Import trace for requested module:
+./lib/suiClient.ts
+./app/providers.tsx
+
+ Γ£ô Compiled successfully in 6.7s
+   Linting and checking validity of types ...
+Failed to compile.
+
+./lib/suiClient.ts:1:10
+Type error: Module '"@mysten/sui/client"' has no exported member 'SuiClient'.
+
+> 1 | import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+    |          ^
+  2 | import { createNetworkConfig } from "@mysten/dapp-kit";
+  3 |
+  4 | export const SPROUT_PACKAGE_ID =
+Next.js build worker exited with code: 1 and signal: null

@@ -10,6 +10,12 @@ import {
 
 const CLOCK_ID = "0x6";
 
+function extractCreatedVaultId(response: { objectChanges?: Array<{ type: string; objectId?: string; objectType?: string }> }) {
+  return response.objectChanges?.find(
+    (change) => change.type === "created" && change.objectType?.endsWith("::vault::Vault"),
+  )?.objectId;
+}
+
 export function useVaultActions() {
   const { mutateAsync: signAndExecuteTransaction } = useSignAndExecuteTransaction();
   const suiClient = useSuiClient();
@@ -44,12 +50,15 @@ export function useVaultActions() {
           console.log("[useVaultActions] STEP: Waiting for On-Chain Confirmation (Effects)...");
           const effects = await suiClient.waitForTransaction({
             digest: result.digest,
-            options: { showEffects: true }
+            options: { showEffects: true, showObjectChanges: true, showEvents: true }
           });
           console.log("[useVaultActions] COMPLETED: Transaction Confirmed on Blockchain.");
           console.log("[useVaultActions] DATA: Status:", effects.effects?.status.status);
 
-          return result;
+          return {
+            ...result,
+            createdVaultId: extractCreatedVaultId(effects),
+          };
         } catch (error: any) {
           console.error("[useVaultActions] FAILED: Execution Error:", error.message || error);
           if (error.stack) console.error("[useVaultActions] TRACE:", error.stack);

@@ -1,0 +1,11 @@
+src/db/mockPool.ts(20,55): error TS7006: Parameter 'v' implicitly has an 'any' type.
+src/db/mockPool.ts(38,69): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/db/mockPool.ts(39,41): error TS7006: Parameter 'acc' implicitly has an 'any' type.
+src/db/mockPool.ts(39,46): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/db/mockPool.ts(54,62): error TS7006: Parameter 'd' implicitly has an 'any' type.
+src/db/mockPool.ts(59,55): error TS7006: Parameter 'v' implicitly has an 'any' type.
+src/db/mockPool.ts(81,54): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/db/mockPool.ts(98,10): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/db/mockPool.ts(98,17): error TS7006: Parameter 'cb' implicitly has an 'any' type.
+src/db/pool.ts(18,21): error TS7006: Parameter 'err' implicitly has an 'any' type.
+src/routes/vaults.ts(36,38): error TS7006: Parameter 'row' implicitly has an 'any' type.

@@ -1,0 +1,37 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-pine-950: #0E1F17;
+  --color-pine-900: #16291F;
+  --color-pine-800: #1F3A2C;
+  --color-pine-700: #2C4F3C;
+
+  --color-sprout-400: #9FD66B;
+  --color-sprout-500: #86C454;
+
+  --color-harvest-400: #E8B865;
+
+  --color-mist: #EEF3EC;
+
+  --font-display: "Fraunces", serif;
+  --font-body: "IBM Plex Sans", sans-serif;
+}
+
+:root {
+  --font-fraunces: 'Fraunces', serif;
+  --font-ibm-plex-sans: 'IBM Plex Sans', sans-serif;
+}
+
+body {
+  background-color: var(--color-pine-950);
+  color: var(--color-mist);
+  font-family: var(--font-ibm-plex-sans);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-fraunces);
+}.glass { background: rgba(22, 41, 31, 0.4); backdrop-filter: blur(12px); border: 1px solid rgba(31, 58, 44, 1); } .glass-card { background: rgba(22, 41, 31, 0.6); backdrop-filter: blur(20px); border: 1px solid rgba(31, 58, 44, 1); border-radius: 2.5rem; }

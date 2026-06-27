@@ -8,10 +8,12 @@ import { useVaultActions } from "@/lib/vault";
 import { API_URL, SPROUT_PACKAGE_ID } from "@/lib/suiClient";
 import { Loader2, Plus, ArrowUpRight, History, Wallet, CheckCircle2, AlertCircle } from "lucide-react";
 import confetti from "canvas-confetti";
+import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
   const account = useCurrentAccount();
   const { isConnected } = useCurrentWallet();
+  const router = useRouter();
   const suiClient = useSuiClient();
   const [vault, setVault] = useState<any>(null);
   const [pending, setPending] = useState<any>(null);
@@ -79,6 +81,19 @@ export default function Dashboard() {
       return { status: "error" as const, message: "Direct Sui vault lookup failed." };
     }
   }, [account, normalizeVault, suiClient]);
+
+  const hydrateCreatedVault = useCallback((vaultId: string) => {
+    if (!account) return;
+    setVault({
+      owner: account.address,
+      vault_id: vaultId,
+      balance: "0",
+      total_deposited: "0",
+      deposit_count: 0,
+      opened_at: new Date().toISOString(),
+    });
+    setActiveTab("overview");
+  }, [account]);
 
   /**
    * Final Production Vault Lookup
@@ -207,6 +222,12 @@ export default function Dashboard() {
       const result = await openVault();
       console.log("[handleOpenVault] COMPLETED: Transaction Successful. Digest:", result.digest);
 
+      if (result.createdVaultId) {
+        console.log("[handleOpenVault] DATA: Created Vault ID:", result.createdVaultId);
+        hydrateCreatedVault(result.createdVaultId);
+        router.replace("/dashboard");
+      }
+
       setProcessingStatus("Waiting for indexer to catch up...");
 
       let synced = false;
@@ -234,7 +255,11 @@ export default function Dashboard() {
         });
       } else {
         console.warn("[handleOpenVault] TIMEOUT: Vault created on-chain but not yet indexed.");
-        alert("Transaction confirmed! Your vault is being created. Please wait a few moments and refresh the page.");
+        if (result.createdVaultId) {
+          alert("Transaction confirmed! Your vault is opening now.");
+        } else {
+          alert("Transaction confirmed! Your vault is being created. Please wait a few moments and refresh the page.");
+        }
       }
 
     } catch (e: any) {
@@ -247,7 +272,7 @@ export default function Dashboard() {
       txLock.current = false;
       console.log("[handleOpenVault] FINISHED: Flow ended, lock released.");
     }
-  }, [account, openVault, fetchVault, isProcessing]);
+  }, [account, openVault, fetchVault, hydrateCreatedVault, isProcessing, router]);
 
   /**
    * Authoritative Flow: handleDeposit
