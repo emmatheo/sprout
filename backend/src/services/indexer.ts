@@ -1,12 +1,8 @@
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
+import { client, PACKAGE_ID } from '../sui.js';
 import { pool } from '../db/pool.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-const PACKAGE_ID = process.env.SPROUT_PACKAGE_ID!;
-const NETWORK = (process.env.SUI_NETWORK as 'mainnet' | 'testnet' | 'devnet' | 'localnet') || 'testnet';
-const client = new SuiClient({ url: getFullnodeUrl(NETWORK) });
 
 async function getCursor() {
   const res = await pool.query('SELECT last_seq FROM indexer_cursor WHERE id = 1');

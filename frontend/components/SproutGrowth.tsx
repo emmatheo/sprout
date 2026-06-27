@@ -20,8 +20,8 @@ export default function SproutGrowth({ totalDepositedSui, size = 200 }: SproutGr
   const bottom = size - 20;
 
   return (
-    <div className="relative group">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible">
+    <div className="relative group max-w-full" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible w-full h-full">
         {/* Ground */}
         <line
           x1={cx - 60} y1={bottom}

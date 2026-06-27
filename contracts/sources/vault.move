@@ -119,7 +119,6 @@ module sprout::vault {
 
         let fee_bps = (platform::withdrawal_fee_bps(config) as u64);
         let fee_amount = amount * fee_bps / 10000;
-        let withdrawal_amount = amount - fee_amount;
 
         let mut total_coin = coin::from_balance(balance::split(&mut vault.balance, amount), ctx);
         

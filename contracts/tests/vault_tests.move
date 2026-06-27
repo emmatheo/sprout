@@ -10,9 +10,8 @@ module sprout::vault_tests {
     use sprout::badge::{Self};
 
     #[test]
-    pub fun test_vault_flow() {
+    fun test_vault_flow() {
         let owner = @0xA;
-        let treasury = @0xB;
         let mut scenario = ts::begin(owner);
 
         // 1. Init platform

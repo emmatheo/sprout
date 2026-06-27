@@ -43,7 +43,7 @@ module sprout::badge {
         assert!(total_deposited >= threshold, EThresholdNotMet);
 
         let key = MilestoneClaimedKey { milestone };
-        assert!(!df::exists_(vault::uid(vault), key), EAlreadyClaimed);
+        assert!(!df::exists(vault::uid(vault), key), EAlreadyClaimed);
 
         df::add(vault::uid_mut(vault), key, true);
 

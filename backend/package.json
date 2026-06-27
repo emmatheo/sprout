@@ -10,7 +10,6 @@
     "indexer": "tsx watch src/services/indexer.ts"
   },
   "dependencies": {
-    "@mysten/enoki": "^0.4.0",
     "@mysten/sui": "^1.14.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",

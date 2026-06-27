@@ -1,27 +1,41 @@
 "use client";
 
 import Link from "next/link";
-import { ConnectButton } from "@mysten/dapp-kit";
+import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import SproutGrowth from "@/components/SproutGrowth";
 import { Coins, Zap, ShieldCheck } from "lucide-react";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const account = useCurrentAccount();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (account?.address) {
+      console.log("[Landing] Wallet connected, redirecting to dashboard...");
+      router.push("/dashboard");
+    }
+  }, [account, router]);
+
   return (
     <div className="min-h-screen flex flex-col bg-pine-950 text-mist">
       {/* Navigation */}
-      <nav className="flex justify-between items-center px-8 py-6 max-w-7xl mx-auto w-full">
-        <div className="text-3xl font-display font-bold text-sprout-400">Sprout</div>
-        <ConnectButton connectText="Get started" />
+      <nav className="flex justify-between items-center px-5 sm:px-8 py-6 max-w-7xl mx-auto w-full gap-4">
+        <div className="text-3xl font-display font-bold text-sprout-400 shrink-0">Sprout</div>
+        <div className="hidden sm:block">
+          <ConnectButton connectText="Get started" />
+        </div>
       </nav>
 
       {/* Hero */}
-      <main className="flex-grow flex items-center px-8 max-w-7xl mx-auto w-full py-12">
+      <main className="flex-grow flex items-center px-5 sm:px-8 max-w-7xl mx-auto w-full py-12 overflow-hidden">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
           <div className="space-y-8">
             <div className="inline-block px-4 py-1.5 rounded-full bg-pine-900 border border-pine-800 text-sprout-400 font-medium text-sm">
               Spare change, invested automatically
             </div>
-            <h1 className="text-5xl md:text-7xl font-display font-bold leading-tight">
+            <h1 className="text-4xl sm:text-5xl md:text-7xl font-display font-bold leading-tight">
               You won't notice saving. <br />
               <span className="text-harvest-400">You'll notice having saved.</span>
             </h1>
@@ -41,12 +55,11 @@ export default function Home() {
               </div>
             </div>
             <p className="text-sm text-mist/40 max-w-md">
-              New here? Continue with Google — no wallet install needed.
-              Already have a Sui wallet? Connect it the same way.
+              Connect your Sui wallet to start saving your spare change on-chain.
             </p>
           </div>
           <div className="flex justify-center lg:justify-end">
-            <div className="relative">
+            <div className="relative w-full max-w-[300px] sm:max-w-[400px]">
               <div className="absolute -inset-10 bg-sprout-500/10 blur-[100px] rounded-full"></div>
               <SproutGrowth totalDepositedSui={14} size={400} />
             </div>

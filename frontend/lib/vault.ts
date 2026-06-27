@@ -1,128 +1,115 @@
-"use client";
-
+import { useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
-import { DeepBookClient } from "@mysten/deepbook-v3";
-import { SPROUT_PACKAGE_ID, PLATFORM_CONFIG_ID, DEEPBOOK_USDC_SUI_POOL_ID, suiClient } from "./suiClient";
-import { useSponsoredTransaction } from "./sponsoredTx";
+import { useMemo } from "react";
+
+import {
+  SPROUT_PACKAGE_ID,
+  PLATFORM_CONFIG_ID,
+  SUI_CHAIN,
+} from "./suiClient";
 
 const CLOCK_ID = "0x6";
 
 export function useVaultActions() {
-  const { executeSponsored } = useSponsoredTransaction();
+  const { mutateAsync: signAndExecuteTransaction } = useSignAndExecuteTransaction();
+  const suiClient = useSuiClient();
 
-  const openVault = async (sender: string) => {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${SPROUT_PACKAGE_ID}::vault::open_vault`,
-      arguments: [tx.object(CLOCK_ID)],
-    });
-    return await executeSponsored(tx, sender);
-  };
+  return useMemo(() => {
+    return {
+      openVault: async () => {
+        console.log("[useVaultActions] PHASE: openVault Started");
+        if (!SPROUT_PACKAGE_ID) {
+          console.error("[useVaultActions] FAILED: SPROUT_PACKAGE_ID is missing from environment.");
+          throw new Error("PRODUCTION ERROR: SPROUT_PACKAGE_ID is missing from environment.");
+        }
 
-  const deposit = async ({
-    vaultId,
-    amountMist,
-    sourceLabel,
-    payWithUsdc,
-    sender
-  }: {
-    vaultId: string;
-    amountMist: string;
-    sourceLabel: string;
-    payWithUsdc: boolean;
-    sender: string;
-  }) => {
-    const tx = new Transaction();
+        console.log("[useVaultActions] STEP: Building Transaction Block...");
+        const tx = new Transaction();
+        tx.setGasBudget(50_000_000);
 
-    let coinToDeposit;
+        tx.moveCall({
+          target: `${SPROUT_PACKAGE_ID}::vault::open_vault`,
+          arguments: [tx.object(CLOCK_ID)],
+        });
+        console.log("[useVaultActions] COMPLETED: Transaction Block Built.");
 
-    if (payWithUsdc) {
-      // DeepBook V3 Swap: USDC -> SUI
-      // We assume the user has USDC and we want to swap it for SUI to deposit.
-      // 1. We need to find or split the USDC coin from the user's gas/coins.
-      // For this demo, we'll split it from the gas if it were USDC, but since it's a demo,
-      // we'll simulate the USDC coin being passed in.
+        console.log("[useVaultActions] STEP: Requesting Wallet Signature...");
+        try {
+          const result = await signAndExecuteTransaction({
+            transaction: tx,
+            chain: SUI_CHAIN,
+          });
+          console.log("[useVaultActions] COMPLETED: Signature Received. Digest:", result.digest);
 
-      // DEEPBOOK_PACKAGE_ID is usually 0xdee9... on testnet
-      const DEEPBOOK_PACKAGE_ID = "0xdee9";
+          console.log("[useVaultActions] STEP: Waiting for On-Chain Confirmation (Effects)...");
+          const effects = await suiClient.waitForTransaction({
+            digest: result.digest,
+            options: { showEffects: true }
+          });
+          console.log("[useVaultActions] COMPLETED: Transaction Confirmed on Blockchain.");
+          console.log("[useVaultActions] DATA: Status:", effects.effects?.status.status);
 
-      // Find USDC coin (this is simplified for the demo)
-      // In a real app, you'd use suiClient.getCoins to find the USDC coins.
-      const [usdcCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(BigInt(amountMist) * 2n)]); // Assume 2:1 ratio for demo or just split
+          return result;
+        } catch (error: any) {
+          console.error("[useVaultActions] FAILED: Execution Error:", error.message || error);
+          if (error.stack) console.error("[useVaultActions] TRACE:", error.stack);
+          throw error;
+        }
+      },
 
-      const [suiCoin] = tx.moveCall({
-        target: `${DEEPBOOK_PACKAGE_ID}::deepbook::swap_exact_quote_for_base`,
-        arguments: [
-          tx.object(DEEPBOOK_USDC_SUI_POOL_ID),
-          usdcCoin,
-          tx.pure.u64(0), // account_cap: None
-          tx.object(CLOCK_ID),
-        ],
-        typeArguments: [
-          "0x...::usdc::USDC", // Quote
-          "0x2::sui::SUI"      // Base
-        ]
-      });
-      coinToDeposit = suiCoin;
-    } else {
-      [coinToDeposit] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)]);
-    }
+      deposit: async (vaultId: string, amountMist: string, sourceLabel: string = "Deposit") => {
+        console.log(`[useVaultActions] Building deposit: ${amountMist} mist for vault ${vaultId}`);
+        if (!SPROUT_PACKAGE_ID) throw new Error("PRODUCTION ERROR: SPROUT_PACKAGE_ID is missing.");
 
-    if (!coinToDeposit) {
-      // Fallback for non-usdc flow if splitCoins failed or for usdc placeholder
-      [coinToDeposit] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)]);
-    }
+        const tx = new Transaction();
+        tx.setGasBudget(30_000_000);
 
-    tx.moveCall({
-      target: `${SPROUT_PACKAGE_ID}::vault::deposit`,
-      arguments: [
-        tx.object(vaultId),
-        coinToDeposit,
-        tx.pure.string(sourceLabel),
-        tx.object(CLOCK_ID),
-      ],
-    });
+        const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)]);
 
-    return await executeSponsored(tx, sender);
-  };
+        tx.moveCall({
+          target: `${SPROUT_PACKAGE_ID}::vault::deposit`,
+          arguments: [tx.object(vaultId), coin, tx.pure.string(sourceLabel), tx.object(CLOCK_ID)],
+        });
 
-  const withdraw = async ({
-    vaultId,
-    amountMist,
-    sender
-  }: {
-    vaultId: string;
-    amountMist: string;
-    sender: string;
-  }) => {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${SPROUT_PACKAGE_ID}::vault::withdraw`,
-      arguments: [
-        tx.object(vaultId),
-        tx.object(PLATFORM_CONFIG_ID),
-        tx.pure.u64(amountMist),
-      ],
-    });
-    return await executeSponsored(tx, sender);
-  };
+        console.log("[useVaultActions] Requesting signature for deposit...");
+        try {
+          const result = await signAndExecuteTransaction({
+            transaction: tx,
+            chain: SUI_CHAIN,
+          });
+          await suiClient.waitForTransaction({ digest: result.digest });
+          return result;
+        } catch (error: any) {
+          console.error("[useVaultActions] Deposit failure details:", error);
+          throw error;
+        }
+      },
 
-  const claimMilestoneBadge = async ({
-    vaultId,
-    milestone,
-    sender
-  }: {
-    vaultId: string;
-    milestone: number;
-    sender: string;
-  }) => {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${SPROUT_PACKAGE_ID}::badge::claim_milestone_badge`,
-      arguments: [tx.object(vaultId), tx.pure.u8(milestone)],
-    });
-    return await executeSponsored(tx, sender);
-  };
+      withdraw: async (vaultId: string, amountMist: string) => {
+        console.log(`[useVaultActions] Building withdraw: ${amountMist} mist from vault ${vaultId}`);
+        if (!SPROUT_PACKAGE_ID || !PLATFORM_CONFIG_ID) throw new Error("PRODUCTION ERROR: Missing config IDs.");
 
-  return { openVault, deposit, withdraw, claimMilestoneBadge };
+        const tx = new Transaction();
+        tx.setGasBudget(30_000_000);
+
+        tx.moveCall({
+          target: `${SPROUT_PACKAGE_ID}::vault::withdraw`,
+          arguments: [tx.object(vaultId), tx.object(PLATFORM_CONFIG_ID), tx.pure.u64(amountMist)],
+        });
+
+        console.log("[useVaultActions] Requesting signature for withdrawal...");
+        try {
+          const result = await signAndExecuteTransaction({
+            transaction: tx,
+            chain: SUI_CHAIN,
+          });
+          await suiClient.waitForTransaction({ digest: result.digest });
+          return result;
+        } catch (error: any) {
+          console.error("[useVaultActions] Withdrawal failure details:", error);
+          throw error;
+        }
+      },
+    };
+  }, [signAndExecuteTransaction, suiClient]);
 }
