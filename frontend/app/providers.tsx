@@ -25,7 +25,10 @@ export function Providers({
         networks={networkConfig}
         defaultNetwork={SUI_NETWORK}
       >
-        <WalletProvider autoConnect>
+        <WalletProvider
+          autoConnect
+          enableUnsafeBurner={process.env.NEXT_PUBLIC_ENABLE_UNSAFE_BURNER === "true"}
+        >
           {children}
         </WalletProvider>
       </SuiClientProvider>

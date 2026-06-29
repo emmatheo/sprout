@@ -1,7 +1,10 @@
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import dotenv from 'dotenv';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 
-dotenv.config();
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(__dirname, '../.env') });
 
 const NETWORK = (process.env.SUI_NETWORK as 'mainnet' | 'testnet' | 'devnet' | 'localnet') || 'testnet';
 export const client = new SuiClient({ url: getFullnodeUrl(NETWORK) });

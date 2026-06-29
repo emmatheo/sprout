@@ -10,7 +10,7 @@ import {
 
 const CLOCK_ID = "0x6";
 
-function extractCreatedVaultId(response: { objectChanges?: Array<{ type: string; objectId?: string; objectType?: string }> }) {
+function extractCreatedVaultId(response: { objectChanges?: Array<{ type: string; objectId?: string; objectType?: string }> | null }) {
   return response.objectChanges?.find(
     (change) => change.type === "created" && change.objectType?.endsWith("::vault::Vault"),
   )?.objectId;
@@ -55,8 +55,13 @@ export function useVaultActions() {
           console.log("[useVaultActions] COMPLETED: Transaction Confirmed on Blockchain.");
           console.log("[useVaultActions] DATA: Status:", effects.effects?.status.status);
 
+          if (effects.effects?.status.status !== "success") {
+            throw new Error(effects.effects?.status.error || "Vault transaction failed on-chain.");
+          }
+
           return {
             ...result,
+            effects,
             createdVaultId: extractCreatedVaultId(effects),
           };
         } catch (error: any) {

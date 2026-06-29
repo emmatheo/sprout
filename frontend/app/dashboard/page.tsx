@@ -10,6 +10,14 @@ import { Loader2, Plus, ArrowUpRight, History, Wallet, CheckCircle2, AlertCircle
 import confetti from "canvas-confetti";
 import { useRouter } from "next/navigation";
 
+function traceDashboard(event: string, details?: Record<string, unknown>) {
+  if (details) {
+    console.log(`[DashboardFlow] ${event}`, details);
+  } else {
+    console.log(`[DashboardFlow] ${event}`);
+  }
+}
+
 export default function Dashboard() {
   const account = useCurrentAccount();
   const { isConnected } = useCurrentWallet();
@@ -28,8 +36,26 @@ export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState("");
   const txLock = useRef(false);
+  const currentVaultRef = useRef<any>(null);
 
   const { openVault, deposit, withdraw } = useVaultActions();
+
+  useEffect(() => {
+    traceDashboard("Dashboard mounted");
+  }, []);
+
+  useEffect(() => {
+    currentVaultRef.current = vault;
+    if (vault) {
+      traceDashboard("Vault rendered", {
+        owner: vault.owner,
+        vaultId: vault.vault_id,
+        balance: vault.balance,
+      });
+    } else {
+      traceDashboard("Vault cleared");
+    }
+  }, [vault]);
 
   const normalizeVault = useCallback((owner: string, objectId: string, fields: any) => {
     const balance = fields?.balance?.fields?.value ?? fields?.balance ?? 0;
@@ -45,6 +71,11 @@ export default function Dashboard() {
       deposit_count: Number(depositCount) || 0,
       opened_at: openedAt,
     };
+  }, []);
+
+  const getFieldAddress = useCallback((value: any): string | undefined => {
+    if (typeof value === "string") return value;
+    return value?.fields?.bytes ?? value?.fields?.value;
   }, []);
 
   const fetchVaultFromChain = useCallback(async () => {
@@ -68,7 +99,9 @@ export default function Dashboard() {
       const vaultId = vaultObject?.objectId;
       const fields = vaultObject?.content?.fields;
 
-      if (vaultId && fields) {
+      const objectOwner = getFieldAddress(fields?.owner);
+
+      if (vaultId && fields && (!objectOwner || objectOwner.toLowerCase() === account.address.toLowerCase())) {
         return {
           status: "found" as const,
           vault: normalizeVault(account.address, vaultId, fields),
@@ -80,10 +113,15 @@ export default function Dashboard() {
       console.error("[fetchVaultFromChain] FAILED:", error);
       return { status: "error" as const, message: "Direct Sui vault lookup failed." };
     }
-  }, [account, normalizeVault, suiClient]);
+  }, [account, getFieldAddress, normalizeVault, suiClient]);
 
   const hydrateCreatedVault = useCallback((vaultId: string) => {
     if (!account) return;
+    traceDashboard("Vault state update started", {
+      source: "confirmed-transaction",
+      owner: account.address,
+      vaultId,
+    });
     setVault({
       owner: account.address,
       vault_id: vaultId,
@@ -92,21 +130,85 @@ export default function Dashboard() {
       deposit_count: 0,
       opened_at: new Date().toISOString(),
     });
+    setLoading(false);
+    setLoadError("");
+    traceDashboard("Vault state updated", {
+      source: "confirmed-transaction",
+      owner: account.address,
+      vaultId,
+    });
     setActiveTab("overview");
+  }, [account]);
+
+  const syncCreatedVault = useCallback(async (vaultId: string) => {
+    if (!account) return null;
+
+    try {
+      traceDashboard("Backend sync started", {
+        owner: account.address,
+        vaultId,
+      });
+      const res = await fetch(`${API_URL}/api/vaults/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner: account.address, vaultId }),
+      });
+
+      if (!res.ok) {
+        traceDashboard("Backend sync failed", {
+          owner: account.address,
+          vaultId,
+          status: res.status,
+        });
+        console.warn("[syncCreatedVault] Backend sync failed with status:", res.status);
+        return null;
+      }
+
+      const data = await res.json();
+      traceDashboard("Backend sync completed", {
+        owner: data.owner,
+        vaultId: data.vault_id,
+      });
+      traceDashboard("Vault state update started", {
+        source: "backend-sync",
+        owner: data.owner,
+        vaultId: data.vault_id,
+      });
+      setVault(data);
+      traceDashboard("Vault state updated", {
+        source: "backend-sync",
+        owner: data.owner,
+        vaultId: data.vault_id,
+      });
+      return data;
+    } catch (error) {
+      traceDashboard("Backend sync failed", {
+        owner: account.address,
+        vaultId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      console.warn("[syncCreatedVault] Backend sync unavailable:", error);
+      return null;
+    }
   }, [account]);
 
   /**
    * Final Production Vault Lookup
    * Checks backend (which queries on-chain if necessary).
    */
-  const fetchVault = useCallback(async (): Promise<"found" | "missing" | "error"> => {
+  const fetchVault = useCallback(async (options?: { preserveExisting?: boolean }): Promise<"found" | "missing" | "error"> => {
     if (!account) {
       console.log("[fetchVault] ABORTED: No account connected.");
       return "missing";
     }
 
+    const preserveExisting = options?.preserveExisting ?? false;
+    traceDashboard("Vault fetch started", {
+      owner: account.address,
+      preserveExisting,
+    });
     console.log(`[fetchVault] STARTED: Fetching vault for address ${account.address}`);
-    setLoadError("");
+    if (!preserveExisting) setLoadError("");
     try {
       const res = await fetch(`${API_URL}/api/vaults/${account.address}`);
       console.log(`[fetchVault] COMPLETED: API responded with status ${res.status}`);
@@ -114,18 +216,28 @@ export default function Dashboard() {
       if (res.ok) {
         const data = await res.json();
         console.log(`[fetchVault] DATA: Found Vault ID: ${data.vault_id}`);
+        traceDashboard("Vault fetch succeeded", {
+          source: "backend",
+          owner: data.owner,
+          vaultId: data.vault_id,
+        });
         setVault(data);
         return "found";
       } else if (res.status === 404) {
         console.log("[fetchVault] INFO: No vault found in database.");
         const chainResult = await fetchVaultFromChain();
         if (chainResult.status === "found") {
+          traceDashboard("Vault fetch succeeded", {
+            source: "chain",
+            owner: chainResult.vault.owner,
+            vaultId: chainResult.vault.vault_id,
+          });
           setVault(chainResult.vault);
           return "found";
         }
-        setVault(null);
+        if (!preserveExisting) setVault(null);
         if (chainResult.status === "error") {
-          setLoadError("Sprout could not verify your vault. The chain lookup also failed.");
+          if (!preserveExisting) setLoadError("Sprout could not verify your vault. The chain lookup also failed.");
           return "error";
         }
         return "missing";
@@ -134,29 +246,39 @@ export default function Dashboard() {
         console.error(`[fetchVault] FAILED: Server Error: ${errText}`);
         const chainResult = await fetchVaultFromChain();
         if (chainResult.status === "found") {
+          traceDashboard("Vault fetch succeeded", {
+            source: "chain-after-backend-error",
+            owner: chainResult.vault.owner,
+            vaultId: chainResult.vault.vault_id,
+          });
           setVault(chainResult.vault);
           return "found";
         }
-        setVault(null);
+        if (!preserveExisting) setVault(null);
         if (chainResult.status === "missing") {
-          setLoadError("Sprout could not verify your vault from the backend, but the chain has no vault for this wallet yet.");
+          if (!preserveExisting) setLoadError("Sprout could not verify your vault from the backend, but the chain has no vault for this wallet yet.");
           return "missing";
         }
-        setLoadError("Sprout could not verify your vault. Please retry before creating a new one.");
+        if (!preserveExisting) setLoadError("Sprout could not verify your vault. Please retry before creating a new one.");
         return "error";
       }
     } catch (e) {
       console.error("[fetchVault] FAILED: Network Error:", e);
       const chainResult = await fetchVaultFromChain();
       if (chainResult.status === "found") {
+        traceDashboard("Vault fetch succeeded", {
+          source: "chain-after-network-error",
+          owner: chainResult.vault.owner,
+          vaultId: chainResult.vault.vault_id,
+        });
         setVault(chainResult.vault);
         return "found";
       }
-      setVault(null);
+      if (!preserveExisting) setVault(null);
       if (chainResult.status === "missing") {
         return "missing";
       }
-      setLoadError("Sprout API is unreachable and direct vault lookup failed.");
+      if (!preserveExisting) setLoadError("Sprout API is unreachable and direct vault lookup failed.");
       return "error";
     }
   }, [account, fetchVaultFromChain]);
@@ -190,6 +312,7 @@ export default function Dashboard() {
    */
   const handleOpenVault = useCallback(async () => {
     console.log("[handleOpenVault] CLICKED: Initialize Vault Button Triggered");
+    traceDashboard("Initialize vault clicked");
 
     if (!account) {
       console.error("[handleOpenVault] FAILED: No wallet connected.");
@@ -203,6 +326,11 @@ export default function Dashboard() {
     }
 
     console.log("[handleOpenVault] STARTED: Initializing Vault Flow");
+    traceDashboard("Vault fetch started", {
+      owner: account.address,
+      preserveExisting: false,
+      phase: "preflight-existence-check",
+    });
     setIsProcessing(true);
     setProcessingStatus("Checking for an existing vault...");
     txLock.current = true;
@@ -220,13 +348,27 @@ export default function Dashboard() {
       setProcessingStatus("Preparing secure connection...");
       console.log("[handleOpenVault] STEP: Calling openVault() lib action...");
       const result = await openVault();
+      traceDashboard("Transaction confirmed", {
+        digest: result.digest,
+        createdVaultId: result.createdVaultId ?? null,
+      });
       console.log("[handleOpenVault] COMPLETED: Transaction Successful. Digest:", result.digest);
+      traceDashboard("Vault ID returned", {
+        vaultId: result.createdVaultId ?? null,
+      });
 
       if (result.createdVaultId) {
         console.log("[handleOpenVault] DATA: Created Vault ID:", result.createdVaultId);
         hydrateCreatedVault(result.createdVaultId);
-        router.replace("/dashboard");
+        void syncCreatedVault(result.createdVaultId);
       }
+
+      traceDashboard("Dashboard navigation started", {
+        href: "/dashboard",
+        method: "replace",
+        vaultId: result.createdVaultId ?? null,
+      });
+      router.replace("/dashboard");
 
       setProcessingStatus("Waiting for indexer to catch up...");
 
@@ -235,7 +377,7 @@ export default function Dashboard() {
       for (let i = 0; i < MAX_ATTEMPTS; i++) {
         setProcessingStatus(`Confirming setup (${i + 1}/${MAX_ATTEMPTS})...`);
         console.log(`[handleOpenVault] SYNC: Polling backend (Attempt ${i + 1}/${MAX_ATTEMPTS})...`);
-        const syncState = await fetchVault();
+        const syncState = await fetchVault({ preserveExisting: !!result.createdVaultId });
         synced = syncState === "found";
         if (synced) {
           console.log("[handleOpenVault] COMPLETED: Vault found and synchronized.");
@@ -272,7 +414,7 @@ export default function Dashboard() {
       txLock.current = false;
       console.log("[handleOpenVault] FINISHED: Flow ended, lock released.");
     }
-  }, [account, openVault, fetchVault, hydrateCreatedVault, isProcessing, router]);
+  }, [account, openVault, fetchVault, hydrateCreatedVault, syncCreatedVault, isProcessing, router]);
 
   /**
    * Authoritative Flow: handleDeposit
@@ -386,17 +528,47 @@ export default function Dashboard() {
     setProcessingStatus("");
 
     if (account?.address) {
+      const existingVault = currentVaultRef.current;
+      const preserveExisting = Boolean(
+        existingVault?.owner &&
+        existingVault.owner.toLowerCase() === account.address.toLowerCase()
+      );
+
       console.log("[Dashboard] Phase: Account Connected. Root:", account.address);
+      traceDashboard("Account connected", {
+        owner: account.address,
+        preserveExisting,
+        existingVaultId: preserveExisting ? existingVault.vault_id : null,
+      });
       setLoading(true);
+      if (!preserveExisting) {
+        traceDashboard("Vault state update started", {
+          source: "account-change",
+          owner: account.address,
+        });
+        setVault(null);
+      }
 
       const init = async () => {
         try {
-          await fetchVault();
+          const fetchState = await fetchVault({ preserveExisting });
+          traceDashboard("Initial vault fetch completed", {
+            owner: account.address,
+            status: fetchState,
+            preserveExisting,
+          });
           await Promise.all([fetchPending(), fetchHistory()]);
         } catch (err) {
           console.error("[Dashboard] Initial fetch critical failure:", err);
+          traceDashboard("Initial load failed", {
+            owner: account.address,
+            reason: err instanceof Error ? err.message : String(err),
+          });
         } finally {
           setLoading(false);
+          traceDashboard("Initial load completed", {
+            owner: account.address,
+          });
           console.log("[Dashboard] Phase: Initial Load Complete.");
         }
       };
@@ -404,6 +576,7 @@ export default function Dashboard() {
       init();
     } else {
       setLoading(false);
+      traceDashboard("No account available");
       setVault(null);
       setHistory([]);
       setLoadError("");
@@ -411,16 +584,16 @@ export default function Dashboard() {
   }, [account?.address, fetchVault, fetchPending, fetchHistory]);
 
   // Session recovery check
-  const { isConnected: walletIsConnected } = useCurrentWallet();
   useEffect(() => {
-    if (!walletIsConnected) {
+    if (!isConnected && !account?.address) {
       console.log("[Dashboard] Phase: Wallet Disconnected.");
+      traceDashboard("Wallet disconnected");
       setVault(null);
       setPending(null);
       setHistory([]);
       setLoadError("");
     }
-  }, [walletIsConnected]);
+  }, [account?.address, isConnected]);
 
   if (!isConnected) {
     return (

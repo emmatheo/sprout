@@ -14,6 +14,11 @@ export default function Home() {
   useEffect(() => {
     if (account?.address) {
       console.log("[Landing] Wallet connected, redirecting to dashboard...");
+      console.log("[LandingFlow] Dashboard navigation started", {
+        href: "/dashboard",
+        source: "landing-auto-redirect",
+        wallet: account.address,
+      });
       router.push("/dashboard");
     }
   }, [account, router]);
