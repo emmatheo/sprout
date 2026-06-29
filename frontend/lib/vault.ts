@@ -9,6 +9,15 @@ import {
 } from "./suiClient";
 
 const CLOCK_ID = "0x6";
+const DEPOSIT_GAS_BUDGET_MIST = 30_000_000n;
+const SUI_COIN_TYPE = "0x2::sui::SUI";
+
+type SuiCoin = {
+  coinObjectId: string;
+  version: string;
+  digest: string;
+  balance: string;
+};
 
 function extractCreatedVaultId(response: { objectChanges?: Array<{ type: string; objectId?: string; objectType?: string }> | null }) {
   return response.objectChanges?.find(
@@ -21,15 +30,47 @@ export function useVaultActions() {
   const suiClient = useSuiClient();
 
   return useMemo(() => {
+    const getSuiCoins = async (owner: string) => {
+      const coins: SuiCoin[] = [];
+      let cursor: string | null | undefined = null;
+
+      do {
+        const page = await suiClient.getCoins({
+          owner,
+          coinType: SUI_COIN_TYPE,
+          cursor,
+        });
+        coins.push(...page.data);
+        cursor = page.hasNextPage ? page.nextCursor : null;
+      } while (cursor);
+
+      return coins;
+    };
+
+    const buildDepositCoin = async (tx: Transaction, owner: string, amountMist: bigint) => {
+      const coins = await getSuiCoins(owner);
+      const totalBalance = coins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+
+      if (totalBalance < amountMist + DEPOSIT_GAS_BUDGET_MIST) {
+        throw new Error("Insufficient wallet balance.");
+      }
+
+      tx.setGasPayment(coins.map((coin) => ({
+        objectId: coin.coinObjectId,
+        version: coin.version,
+        digest: coin.digest,
+      })));
+
+      const [depositCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist.toString())]);
+      return depositCoin;
+    };
+
     return {
       openVault: async () => {
-        console.log("[useVaultActions] PHASE: openVault Started");
         if (!SPROUT_PACKAGE_ID) {
-          console.error("[useVaultActions] FAILED: SPROUT_PACKAGE_ID is missing from environment.");
           throw new Error("PRODUCTION ERROR: SPROUT_PACKAGE_ID is missing from environment.");
         }
 
-        console.log("[useVaultActions] STEP: Building Transaction Block...");
         const tx = new Transaction();
         tx.setGasBudget(50_000_000);
 
@@ -37,23 +78,17 @@ export function useVaultActions() {
           target: `${SPROUT_PACKAGE_ID}::vault::open_vault`,
           arguments: [tx.object(CLOCK_ID)],
         });
-        console.log("[useVaultActions] COMPLETED: Transaction Block Built.");
 
-        console.log("[useVaultActions] STEP: Requesting Wallet Signature...");
         try {
           const result = await signAndExecuteTransaction({
             transaction: tx,
             chain: SUI_CHAIN,
           });
-          console.log("[useVaultActions] COMPLETED: Signature Received. Digest:", result.digest);
 
-          console.log("[useVaultActions] STEP: Waiting for On-Chain Confirmation (Effects)...");
           const effects = await suiClient.waitForTransaction({
             digest: result.digest,
             options: { showEffects: true, showObjectChanges: true, showEvents: true }
           });
-          console.log("[useVaultActions] COMPLETED: Transaction Confirmed on Blockchain.");
-          console.log("[useVaultActions] DATA: Status:", effects.effects?.status.status);
 
           if (effects.effects?.status.status !== "success") {
             throw new Error(effects.effects?.status.error || "Vault transaction failed on-chain.");
@@ -65,42 +100,48 @@ export function useVaultActions() {
             createdVaultId: extractCreatedVaultId(effects),
           };
         } catch (error: any) {
-          console.error("[useVaultActions] FAILED: Execution Error:", error.message || error);
-          if (error.stack) console.error("[useVaultActions] TRACE:", error.stack);
           throw error;
         }
       },
 
-      deposit: async (vaultId: string, amountMist: string, sourceLabel: string = "Deposit") => {
-        console.log(`[useVaultActions] Building deposit: ${amountMist} mist for vault ${vaultId}`);
+      deposit: async (owner: string, vaultId: string, amountMist: string, sourceLabel: string = "Deposit") => {
         if (!SPROUT_PACKAGE_ID) throw new Error("PRODUCTION ERROR: SPROUT_PACKAGE_ID is missing.");
 
-        const tx = new Transaction();
-        tx.setGasBudget(30_000_000);
+        const parsedAmount = BigInt(amountMist);
+        if (parsedAmount <= 0n) {
+          throw new Error("Deposit amount must be greater than zero.");
+        }
 
-        const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)]);
+        const tx = new Transaction();
+        tx.setSender(owner);
+        tx.setGasBudget(DEPOSIT_GAS_BUDGET_MIST.toString());
+
+        const coin = await buildDepositCoin(tx, owner, parsedAmount);
 
         tx.moveCall({
           target: `${SPROUT_PACKAGE_ID}::vault::deposit`,
           arguments: [tx.object(vaultId), coin, tx.pure.string(sourceLabel), tx.object(CLOCK_ID)],
         });
 
-        console.log("[useVaultActions] Requesting signature for deposit...");
         try {
           const result = await signAndExecuteTransaction({
             transaction: tx,
             chain: SUI_CHAIN,
           });
-          await suiClient.waitForTransaction({ digest: result.digest });
+          const effects = await suiClient.waitForTransaction({
+            digest: result.digest,
+            options: { showEffects: true },
+          });
+          if (effects.effects?.status.status !== "success") {
+            throw new Error(effects.effects?.status.error || "Deposit transaction failed on-chain.");
+          }
           return result;
         } catch (error: any) {
-          console.error("[useVaultActions] Deposit failure details:", error);
           throw error;
         }
       },
 
       withdraw: async (vaultId: string, amountMist: string) => {
-        console.log(`[useVaultActions] Building withdraw: ${amountMist} mist from vault ${vaultId}`);
         if (!SPROUT_PACKAGE_ID || !PLATFORM_CONFIG_ID) throw new Error("PRODUCTION ERROR: Missing config IDs.");
 
         const tx = new Transaction();
@@ -111,16 +152,20 @@ export function useVaultActions() {
           arguments: [tx.object(vaultId), tx.object(PLATFORM_CONFIG_ID), tx.pure.u64(amountMist)],
         });
 
-        console.log("[useVaultActions] Requesting signature for withdrawal...");
         try {
           const result = await signAndExecuteTransaction({
             transaction: tx,
             chain: SUI_CHAIN,
           });
-          await suiClient.waitForTransaction({ digest: result.digest });
+          const effects = await suiClient.waitForTransaction({
+            digest: result.digest,
+            options: { showEffects: true },
+          });
+          if (effects.effects?.status.status !== "success") {
+            throw new Error(effects.effects?.status.error || "Withdrawal transaction failed on-chain.");
+          }
           return result;
         } catch (error: any) {
-          console.error("[useVaultActions] Withdrawal failure details:", error);
           throw error;
         }
       },

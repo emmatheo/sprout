@@ -17,6 +17,15 @@ type MockDeposit = {
     deposited_at: Date;
 };
 
+type MockWithdrawal = {
+    owner: string;
+    vault_id?: string;
+    amount_mist: string;
+    fee_mist: string;
+    tx_digest: string;
+    withdrawn_at: Date;
+};
+
 type MockPendingRoundup = {
     owner: string;
     amount_mist: string;
@@ -28,7 +37,7 @@ type MockData = {
     vaults: MockVault[];
     deposits: MockDeposit[];
     pending_roundups: MockPendingRoundup[];
-    withdrawals: unknown[];
+    withdrawals: MockWithdrawal[];
     cursor: { id: number; last_seq: string | null };
 };
 
@@ -38,8 +47,6 @@ declare global {
 
 export const pool = {
     query: async (text: string, params: any[] = []) => {
-        console.log(`[MOCK DB] Query: ${text}`, params);
-
         // Simple state management for the demo
         if (!global.mockData) {
             global.mockData = {
@@ -98,6 +105,37 @@ export const pool = {
             return { rows: deposits };
         }
 
+        if (lowerText.includes('select * from withdrawals')) {
+            const withdrawals = mockData.withdrawals.filter((w) => w.owner === params[0]);
+            return { rows: withdrawals };
+        }
+
+        if (lowerText.includes('select coalesce(sum(amount_mist), 0) as total_deposited')) {
+            const deposits = mockData.deposits.filter((d) => d.owner === params[0]);
+            const sum = deposits.reduce((acc, d) => acc + BigInt(d.amount_mist), BigInt(0));
+            return { rows: [{ total_deposited: sum.toString(), deposit_count: deposits.length }] };
+        }
+
+        if (lowerText.includes('select coalesce(sum(amount_mist), 0) as total_withdrawn')) {
+            const withdrawals = mockData.withdrawals.filter((w) => w.owner === params[0]);
+            const sum = withdrawals.reduce((acc, w) => acc + BigInt(w.amount_mist), BigInt(0));
+            return { rows: [{ total_withdrawn: sum.toString(), withdrawal_count: withdrawals.length }] };
+        }
+
+        if (lowerText.includes('select deposited_at as occurred_at')) {
+            const deposits = mockData.deposits
+                .filter((d) => d.owner === params[0])
+                .sort((a, b) => b.deposited_at.getTime() - a.deposited_at.getTime());
+            return { rows: deposits[0] ? [{ occurred_at: deposits[0].deposited_at }] : [] };
+        }
+
+        if (lowerText.includes('select withdrawn_at as occurred_at')) {
+            const withdrawals = mockData.withdrawals
+                .filter((w) => w.owner === params[0])
+                .sort((a, b) => b.withdrawn_at.getTime() - a.withdrawn_at.getTime());
+            return { rows: withdrawals[0] ? [{ occurred_at: withdrawals[0].withdrawn_at }] : [] };
+        }
+
         if (lowerText.includes('update vaults set balance = balance + $1')) {
             const vault = mockData.vaults.find((v) => v.owner === params[2]);
             if (vault) {
@@ -109,6 +147,9 @@ export const pool = {
         }
 
         if (lowerText.includes('insert into deposits')) {
+            if (mockData.deposits.some((d) => d.tx_digest === params[4])) {
+                return { rows: [] };
+            }
             mockData.deposits.push({
                 owner: params[0],
                 vault_id: params[1],
@@ -117,7 +158,31 @@ export const pool = {
                 tx_digest: params[4],
                 deposited_at: params[5]
             });
+            return { rows: [{ id: mockData.deposits.length }] };
+        }
+
+        if (lowerText.includes('update vaults set balance = balance - $1')) {
+            const vault = mockData.vaults.find((v) => v.owner === params[1]);
+            if (vault) {
+                vault.balance = (BigInt(vault.balance) - BigInt(params[0])).toString();
+            }
             return { rows: [] };
+        }
+
+        if (lowerText.includes('insert into withdrawals')) {
+            const txDigest = lowerText.includes('owner, vault_id') ? params[4] : params[3];
+            if (mockData.withdrawals.some((w) => w.tx_digest === txDigest)) {
+                return { rows: [] };
+            }
+            mockData.withdrawals.push({
+                owner: params[0],
+                vault_id: lowerText.includes('owner, vault_id') ? params[1] : undefined,
+                amount_mist: (lowerText.includes('owner, vault_id') ? params[2] : params[1]).toString(),
+                fee_mist: (lowerText.includes('owner, vault_id') ? params[3] : params[2]).toString(),
+                tx_digest: txDigest,
+                withdrawn_at: lowerText.includes('owner, vault_id') ? params[5] : params[4]
+            });
+            return { rows: [{ id: mockData.withdrawals.length }] };
         }
 
         if (lowerText.includes('update pending_roundups set deposited = true')) {
@@ -139,7 +204,7 @@ export const pool = {
         return { rows: [] };
     },
     on: (event: string, cb: (error: Error) => void) => {
+        void event;
         void cb;
-        console.log(`[MOCK DB] Registered listener for ${event}`);
     }
 };

@@ -5,8 +5,8 @@ Sprout is a round-up micro-investing app on the Sui blockchain. It automatically
 ## Project Structure
 
 - `/contracts`: Sui Move modules for vault management and milestones.
-- `/backend`: Node.js/Express server for transaction sponsorship and indexing.
-- `/frontend`: Next.js application with Enoki (zkLogin) and DeepBook integration.
+- `/backend`: Node.js/Express server for API routes and event indexing.
+- `/frontend`: Next.js application for Sui wallet vault management.
 - `/scripts`: Deployment and demo seeding scripts.
 
 ## Quickstart
@@ -44,15 +44,12 @@ npm run dev
 ## Key Technologies
 
 - **Sui Blockchain**: Core on-chain logic.
-- **Enoki (zkLogin)**: Seamless onboarding with Google.
-- **DeepBook v3**: Atomic swaps from USDC to SUI.
-- **Walrus**: Statement storage (future integration).
 - **PostgreSQL**: Event indexing and pending round-up tracking.
 
 ## User Flow
 
-1. **Connect**: Sign in with Google (via Enoki) or a Sui wallet.
-2. **Setup**: Open a free SUI vault (sponsored by Sprout).
+1. **Connect**: Connect a Sui wallet.
+2. **Setup**: Open a SUI vault from the connected wallet.
 3. **Spend**: Simulate purchases using `scripts/seed_demo.sh`.
 4. **Invest**: Deposit pending round-ups into your vault from the dashboard.
 5. **Grow**: Watch your plant grow as your balance increases!

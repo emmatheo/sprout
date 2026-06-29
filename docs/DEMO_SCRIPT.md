@@ -17,37 +17,28 @@ exact insight for stocks. Nobody has done it for crypto. Sprout does."
 
 ---
 
-## 0:35 – 1:30 — Onboarding path 1: brand-new user, no wallet
-Open the fresh browser profile. Go to Sprout. Click **Get started**. The
-dapp-kit modal opens — show that it lists **"Continue with Google"** right
-alongside Phantom or Sui Wallet if they were installed.
+## 0:35 – 1:30 — Connect wallet
+Open Sprout. Click **Get started**. The dapp-kit modal opens — choose the
+available Sui wallet and connect.
 
-Click Continue with Google. Real OAuth screen. Click through. Redirect
-back. Narrate: *"That's zkLogin — a real Sui address was just derived from
-this Google login, entirely in a ZK proof. No seed phrase was generated,
-no browser extension was installed."*
-
-Show the wallet address now visible in the nav — copy it.
+Show the wallet address now visible in the app.
 
 ---
 
-## 1:30 – 2:10 — Open a vault, gas is free
+## 1:30 – 2:10 — Open a vault
 Click **Open my vault**. One signature prompt — click Approve. Narrate
-while it confirms: *"Sprout's backend just asked Enoki to pay the gas for
-this transaction. The user paid nothing — they don't even hold SUI yet."*
+while it confirms: *"This creates a vault owned by the connected Sui wallet."*
 
 Vault opens, sprout graphic appears at minimum height.
 
 ---
 
-## 2:10 – 3:10 — Deposit pending round-ups, pay with USDC
+## 2:10 – 3:10 — Deposit pending round-ups
 Dashboard shows 10 pending round-ups, e.g. **0.847 SUI** total. Tick
-**"Fund from USDC"** checkbox. Click **Deposit now**.
+Click **Deposit now**.
 
-Narrate while it confirms: *"This just did two things in one transaction:
-swapped USDC for exactly 0.847 SUI on DeepBook — an onchain order book,
-not a wrapped DEX — and deposited it into the vault. If the swap had failed,
-the deposit wouldn't happen either. Atomic. One signature."*
+Narrate while it confirms: *"The dashboard validates the connected wallet's
+available SUI balance before sending the deposit transaction."*
 
 Watch the sprout grow taller on screen. Show the vault balance update.
 
@@ -55,7 +46,7 @@ Watch the sprout grow taller on screen. Show the vault balance update.
 
 ## 3:10 – 3:45 — Milestone badge, live
 The first-deposit milestone is now claimable. Click **Claim badge**.
-One sponsored transaction. Switch to the Sui explorer tab and show the
+One wallet-signed transaction. Switch to the Sui explorer tab and show the
 resulting object: type `sprout::badge::MilestoneBadge`, no transfer
 function, soulbound.
 

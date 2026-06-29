@@ -25,11 +25,9 @@ async function indexEvents() {
       });
 
       for (const event of data) {
-        const { type, parsedJson, id, timestampMs, transactionModule } = event;
+        const { type, parsedJson, id } = event;
         const eventType = type.split('::').pop();
         const txDigest = id.txDigest;
-
-        console.log(`Processing event: ${eventType} in ${txDigest}`);
 
         if (eventType === 'VaultOpened') {
           const { vault_id, owner } = parsedJson as any;
@@ -42,18 +40,21 @@ async function indexEvents() {
 
           await pool.query('BEGIN');
           try {
-            await pool.query(
-              'UPDATE vaults SET balance = balance + $1, total_deposited = $2, deposit_count = deposit_count + 1 WHERE owner = $3',
-              [amount, total_deposited, owner]
-            );
-            await pool.query(
-              'INSERT INTO deposits (owner, vault_id, amount_mist, source_label, tx_digest, deposited_at) VALUES ($1, $2, $3, $4, $5, $6)',
+            const inserted = await pool.query(
+              'INSERT INTO deposits (owner, vault_id, amount_mist, source_label, tx_digest, deposited_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (tx_digest) DO NOTHING RETURNING id',
               [owner, vault_id, amount, (parsedJson as any).source_label || 'round-up', txDigest, new Date(Number(event.timestampMs))]
             );
-            await pool.query(
-              'UPDATE pending_roundups SET deposited = TRUE WHERE owner = $1 AND deposited = FALSE',
-              [owner]
-            );
+
+            if (inserted.rows.length > 0) {
+              await pool.query(
+                'UPDATE vaults SET balance = balance + $1, total_deposited = $2, deposit_count = deposit_count + 1 WHERE owner = $3',
+                [amount, total_deposited, owner]
+              );
+              await pool.query(
+                'UPDATE pending_roundups SET deposited = TRUE WHERE owner = $1 AND deposited = FALSE',
+                [owner]
+              );
+            }
             await pool.query('COMMIT');
           } catch (e) {
             await pool.query('ROLLBACK');
@@ -63,14 +64,17 @@ async function indexEvents() {
           const { vault_id, owner, amount, fee } = parsedJson as any;
           await pool.query('BEGIN');
           try {
-            await pool.query(
-              'UPDATE vaults SET balance = balance - $1 WHERE owner = $2',
-              [amount, owner]
+            const inserted = await pool.query(
+              'INSERT INTO withdrawals (owner, vault_id, amount_mist, fee_mist, tx_digest, withdrawn_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (tx_digest) DO NOTHING RETURNING id',
+              [owner, vault_id, amount, fee, txDigest, new Date(Number(event.timestampMs))]
             );
-            await pool.query(
-              'INSERT INTO withdrawals (owner, amount_mist, fee_mist, tx_digest, withdrawn_at) VALUES ($1, $2, $3, $4, $5)',
-              [owner, amount, fee, txDigest, new Date(Number(event.timestampMs))]
-            );
+
+            if (inserted.rows.length > 0) {
+              await pool.query(
+                'UPDATE vaults SET balance = balance - $1 WHERE owner = $2',
+                [amount, owner]
+              );
+            }
             await pool.query('COMMIT');
           } catch (e) {
             await pool.query('ROLLBACK');
@@ -95,5 +99,4 @@ async function indexEvents() {
   }
 }
 
-console.log('Starting indexer...');
 indexEvents();

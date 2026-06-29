@@ -5,17 +5,52 @@ import Link from "next/link";
 import { useEffect, useState, useCallback, useRef } from "react";
 import SproutGrowth from "@/components/SproutGrowth";
 import { useVaultActions } from "@/lib/vault";
-import { API_URL, SPROUT_PACKAGE_ID } from "@/lib/suiClient";
-import { Loader2, Plus, ArrowUpRight, History, Wallet, CheckCircle2, AlertCircle } from "lucide-react";
+import { API_URL, SPROUT_PACKAGE_ID, SUI_NETWORK } from "@/lib/suiClient";
+import { Loader2, Plus, ArrowUpRight, History, Wallet, AlertCircle } from "lucide-react";
 import confetti from "canvas-confetti";
 import { useRouter } from "next/navigation";
 
-function traceDashboard(event: string, details?: Record<string, unknown>) {
-  if (details) {
-    console.log(`[DashboardFlow] ${event}`, details);
-  } else {
-    console.log(`[DashboardFlow] ${event}`);
-  }
+const MIST_PER_SUI = 1_000_000_000;
+const DEPOSIT_GAS_RESERVE_MIST = 30_000_000n;
+
+function formatSui(mist: string | number | null | undefined, fractionDigits = 2) {
+  return (Number(mist || 0) / MIST_PER_SUI).toLocaleString(undefined, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+}
+
+function formatDate(value: string | Date | null | undefined) {
+  if (!value) return "No transactions yet";
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getExplorerTxUrl(digest: string) {
+  return `https://suiexplorer.com/txblock/${digest}?network=${SUI_NETWORK}`;
+}
+
+function parseSuiToMist(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || !/^\d*\.?\d*$/.test(trimmed)) return null;
+
+  const [whole = "0", fractional = ""] = trimmed.split(".");
+  if (!whole && !fractional) return null;
+
+  const normalizedFraction = fractional.slice(0, 9).padEnd(9, "0");
+  return BigInt(whole || "0") * BigInt(MIST_PER_SUI) + BigInt(normalizedFraction || "0");
+}
+
+function mistToInputValue(mist: string | number | bigint | null | undefined) {
+  const amount = BigInt(mist?.toString() || "0");
+  const whole = amount / BigInt(MIST_PER_SUI);
+  const fraction = (amount % BigInt(MIST_PER_SUI)).toString().padStart(9, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
 export default function Dashboard() {
@@ -28,34 +63,43 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
   const [history, setHistory] = useState<any[]>([]);
+  const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [walletBalanceMist, setWalletBalanceMist] = useState("0");
+  const [walletBalanceLoading, setWalletBalanceLoading] = useState(false);
+  const [walletBalanceError, setWalletBalanceError] = useState("");
   const [seeding, setSeeding] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [notice, setNotice] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
 
-  // Production transaction management
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState("");
   const txLock = useRef(false);
   const currentVaultRef = useRef<any>(null);
+  const depositEditedRef = useRef(false);
 
   const { openVault, deposit, withdraw } = useVaultActions();
 
   useEffect(() => {
-    traceDashboard("Dashboard mounted");
-  }, []);
+    currentVaultRef.current = vault;
+  }, [vault]);
+
+  const pendingMist = pending?.pendingMist?.toString() ?? "0";
+  const pendingAmount = BigInt(pendingMist);
+  const depositAmountMist = parseSuiToMist(depositAmount);
+  const walletBalance = BigInt(walletBalanceMist || "0");
+  const maxDepositMist = walletBalance > DEPOSIT_GAS_RESERVE_MIST ? walletBalance - DEPOSIT_GAS_RESERVE_MIST : 0n;
+  const hasDepositAmount = depositAmountMist !== null && depositAmountMist > 0n;
+  const hasDepositBalance = hasDepositAmount && depositAmountMist <= maxDepositMist;
+  const canDeposit = Boolean(account && vault && hasDepositBalance && !isProcessing);
+  const depositValidationError = hasDepositAmount && depositAmountMist > maxDepositMist ? "Insufficient wallet balance." : "";
+  const maxDepositDisplay = mistToInputValue(maxDepositMist);
 
   useEffect(() => {
-    currentVaultRef.current = vault;
-    if (vault) {
-      traceDashboard("Vault rendered", {
-        owner: vault.owner,
-        vaultId: vault.vault_id,
-        balance: vault.balance,
-      });
-    } else {
-      traceDashboard("Vault cleared");
+    if (!depositEditedRef.current && pendingMist !== "0") {
+      setDepositAmount(mistToInputValue(pendingMist));
     }
-  }, [vault]);
+  }, [pendingMist]);
 
   const normalizeVault = useCallback((owner: string, objectId: string, fields: any) => {
     const balance = fields?.balance?.fields?.value ?? fields?.balance ?? 0;
@@ -110,33 +154,28 @@ export default function Dashboard() {
 
       return { status: "missing" as const };
     } catch (error) {
-      console.error("[fetchVaultFromChain] FAILED:", error);
       return { status: "error" as const, message: "Direct Sui vault lookup failed." };
     }
   }, [account, getFieldAddress, normalizeVault, suiClient]);
 
   const hydrateCreatedVault = useCallback((vaultId: string) => {
     if (!account) return;
-    traceDashboard("Vault state update started", {
-      source: "confirmed-transaction",
-      owner: account.address,
-      vaultId,
-    });
     setVault({
       owner: account.address,
       vault_id: vaultId,
       balance: "0",
       total_deposited: "0",
+      total_withdrawn: "0",
+      total_profit_loss: "0",
       deposit_count: 0,
+      withdrawal_count: 0,
+      total_transactions: 0,
       opened_at: new Date().toISOString(),
+      last_transaction_at: null,
+      status: "Active",
     });
     setLoading(false);
     setLoadError("");
-    traceDashboard("Vault state updated", {
-      source: "confirmed-transaction",
-      owner: account.address,
-      vaultId,
-    });
     setActiveTab("overview");
   }, [account]);
 
@@ -144,10 +183,6 @@ export default function Dashboard() {
     if (!account) return null;
 
     try {
-      traceDashboard("Backend sync started", {
-        owner: account.address,
-        vaultId,
-      });
       const res = await fetch(`${API_URL}/api/vaults/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -155,83 +190,34 @@ export default function Dashboard() {
       });
 
       if (!res.ok) {
-        traceDashboard("Backend sync failed", {
-          owner: account.address,
-          vaultId,
-          status: res.status,
-        });
-        console.warn("[syncCreatedVault] Backend sync failed with status:", res.status);
         return null;
       }
 
       const data = await res.json();
-      traceDashboard("Backend sync completed", {
-        owner: data.owner,
-        vaultId: data.vault_id,
-      });
-      traceDashboard("Vault state update started", {
-        source: "backend-sync",
-        owner: data.owner,
-        vaultId: data.vault_id,
-      });
       setVault(data);
-      traceDashboard("Vault state updated", {
-        source: "backend-sync",
-        owner: data.owner,
-        vaultId: data.vault_id,
-      });
       return data;
     } catch (error) {
-      traceDashboard("Backend sync failed", {
-        owner: account.address,
-        vaultId,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      console.warn("[syncCreatedVault] Backend sync unavailable:", error);
       return null;
     }
   }, [account]);
 
-  /**
-   * Final Production Vault Lookup
-   * Checks backend (which queries on-chain if necessary).
-   */
   const fetchVault = useCallback(async (options?: { preserveExisting?: boolean }): Promise<"found" | "missing" | "error"> => {
     if (!account) {
-      console.log("[fetchVault] ABORTED: No account connected.");
       return "missing";
     }
 
     const preserveExisting = options?.preserveExisting ?? false;
-    traceDashboard("Vault fetch started", {
-      owner: account.address,
-      preserveExisting,
-    });
-    console.log(`[fetchVault] STARTED: Fetching vault for address ${account.address}`);
     if (!preserveExisting) setLoadError("");
     try {
       const res = await fetch(`${API_URL}/api/vaults/${account.address}`);
-      console.log(`[fetchVault] COMPLETED: API responded with status ${res.status}`);
 
       if (res.ok) {
         const data = await res.json();
-        console.log(`[fetchVault] DATA: Found Vault ID: ${data.vault_id}`);
-        traceDashboard("Vault fetch succeeded", {
-          source: "backend",
-          owner: data.owner,
-          vaultId: data.vault_id,
-        });
         setVault(data);
         return "found";
       } else if (res.status === 404) {
-        console.log("[fetchVault] INFO: No vault found in database.");
         const chainResult = await fetchVaultFromChain();
         if (chainResult.status === "found") {
-          traceDashboard("Vault fetch succeeded", {
-            source: "chain",
-            owner: chainResult.vault.owner,
-            vaultId: chainResult.vault.vault_id,
-          });
           setVault(chainResult.vault);
           return "found";
         }
@@ -242,15 +228,9 @@ export default function Dashboard() {
         }
         return "missing";
       } else {
-        const errText = await res.text();
-        console.error(`[fetchVault] FAILED: Server Error: ${errText}`);
+        await res.text();
         const chainResult = await fetchVaultFromChain();
         if (chainResult.status === "found") {
-          traceDashboard("Vault fetch succeeded", {
-            source: "chain-after-backend-error",
-            owner: chainResult.vault.owner,
-            vaultId: chainResult.vault.vault_id,
-          });
           setVault(chainResult.vault);
           return "found";
         }
@@ -262,15 +242,9 @@ export default function Dashboard() {
         if (!preserveExisting) setLoadError("Sprout could not verify your vault. Please retry before creating a new one.");
         return "error";
       }
-    } catch (e) {
-      console.error("[fetchVault] FAILED: Network Error:", e);
+    } catch {
       const chainResult = await fetchVaultFromChain();
       if (chainResult.status === "found") {
-        traceDashboard("Vault fetch succeeded", {
-          source: "chain-after-network-error",
-          owner: chainResult.vault.owner,
-          vaultId: chainResult.vault.vault_id,
-        });
         setVault(chainResult.vault);
         return "found";
       }
@@ -283,6 +257,27 @@ export default function Dashboard() {
     }
   }, [account, fetchVaultFromChain]);
 
+  const fetchWalletBalance = useCallback(async () => {
+    if (!account) {
+      setWalletBalanceMist("0");
+      return;
+    }
+
+    setWalletBalanceLoading(true);
+    setWalletBalanceError("");
+    try {
+      const balance = await suiClient.getBalance({
+        owner: account.address,
+        coinType: "0x2::sui::SUI",
+      });
+      setWalletBalanceMist(balance.totalBalance);
+    } catch (error) {
+      setWalletBalanceError("Wallet balance could not be refreshed.");
+    } finally {
+      setWalletBalanceLoading(false);
+    }
+  }, [account, suiClient]);
+
   const fetchPending = useCallback(async () => {
     if (!account) return;
     try {
@@ -290,55 +285,60 @@ export default function Dashboard() {
       if (res.ok) {
         setPending(await res.json());
       }
-    } catch (e) {
-      console.error("[Dashboard] Pending fetch fail:", e);
+    } catch {
+      setNotice({ type: "error", message: "Pending round-ups could not be refreshed." });
     }
   }, [account]);
 
   const fetchHistory = useCallback(async () => {
     if (!account) return;
     try {
-      const res = await fetch(`${API_URL}/api/vaults/${account.address}/deposits`);
+      const res = await fetch(`${API_URL}/api/vaults/${account.address}/transactions`);
       if (res.ok) {
         setHistory(await res.json());
       }
-    } catch (e) {
-      console.error("[Dashboard] History fetch fail:", e);
+    } catch {
+      setNotice({ type: "error", message: "Transaction history could not be refreshed." });
     }
   }, [account]);
 
-  /**
-   * Authoritative Flow: handleOpenVault
-   */
-  const handleOpenVault = useCallback(async () => {
-    console.log("[handleOpenVault] CLICKED: Initialize Vault Button Triggered");
-    traceDashboard("Initialize vault clicked");
+  const refreshDashboard = useCallback(async (options?: { attempts?: number; waitMs?: number }) => {
+    const attempts = options?.attempts ?? 1;
+    const waitMs = options?.waitMs ?? 2000;
 
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      await Promise.all([
+        fetchWalletBalance(),
+        fetchVault({ preserveExisting: true }),
+        fetchPending(),
+        fetchHistory(),
+      ]);
+
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+  }, [fetchWalletBalance, fetchVault, fetchPending, fetchHistory]);
+
+  const handleOpenVault = useCallback(async () => {
     if (!account) {
-      console.error("[handleOpenVault] FAILED: No wallet connected.");
-      alert("Please connect your wallet first.");
+      setNotice({ type: "error", message: "Please connect your wallet first." });
       return;
     }
 
     if (isProcessing || txLock.current) {
-      console.warn("[handleOpenVault] ABORTED: Transaction already in progress (Locked).");
       return;
     }
 
-    console.log("[handleOpenVault] STARTED: Initializing Vault Flow");
-    traceDashboard("Vault fetch started", {
-      owner: account.address,
-      preserveExisting: false,
-      phase: "preflight-existence-check",
-    });
     setIsProcessing(true);
     setProcessingStatus("Checking for an existing vault...");
+    setNotice(null);
     txLock.current = true;
 
     try {
       const existingVault = await fetchVault();
       if (existingVault === "found") {
-        console.log("[handleOpenVault] ABORTED: Existing vault found before creation.");
+        setNotice({ type: "info", message: "This wallet already has an active vault." });
         return;
       }
       if (existingVault === "error") {
@@ -346,28 +346,13 @@ export default function Dashboard() {
       }
 
       setProcessingStatus("Preparing secure connection...");
-      console.log("[handleOpenVault] STEP: Calling openVault() lib action...");
       const result = await openVault();
-      traceDashboard("Transaction confirmed", {
-        digest: result.digest,
-        createdVaultId: result.createdVaultId ?? null,
-      });
-      console.log("[handleOpenVault] COMPLETED: Transaction Successful. Digest:", result.digest);
-      traceDashboard("Vault ID returned", {
-        vaultId: result.createdVaultId ?? null,
-      });
 
       if (result.createdVaultId) {
-        console.log("[handleOpenVault] DATA: Created Vault ID:", result.createdVaultId);
         hydrateCreatedVault(result.createdVaultId);
         void syncCreatedVault(result.createdVaultId);
       }
 
-      traceDashboard("Dashboard navigation started", {
-        href: "/dashboard",
-        method: "replace",
-        vaultId: result.createdVaultId ?? null,
-      });
       router.replace("/dashboard");
 
       setProcessingStatus("Waiting for indexer to catch up...");
@@ -376,11 +361,9 @@ export default function Dashboard() {
       const MAX_ATTEMPTS = 8;
       for (let i = 0; i < MAX_ATTEMPTS; i++) {
         setProcessingStatus(`Confirming setup (${i + 1}/${MAX_ATTEMPTS})...`);
-        console.log(`[handleOpenVault] SYNC: Polling backend (Attempt ${i + 1}/${MAX_ATTEMPTS})...`);
         const syncState = await fetchVault({ preserveExisting: !!result.createdVaultId });
         synced = syncState === "found";
         if (synced) {
-          console.log("[handleOpenVault] COMPLETED: Vault found and synchronized.");
           break;
         }
         if (syncState === "error") break;
@@ -388,7 +371,8 @@ export default function Dashboard() {
       }
 
       if (synced) {
-        console.log("[handleOpenVault] SUCCESS: User should now see the dashboard.");
+        await Promise.all([fetchWalletBalance(), fetchPending(), fetchHistory()]);
+        setNotice({ type: "success", message: "Vault opened successfully." });
         confetti({
           particleCount: 150,
           spread: 70,
@@ -396,40 +380,76 @@ export default function Dashboard() {
           colors: ["#86C454", "#9FD66B", "#E8B865"]
         });
       } else {
-        console.warn("[handleOpenVault] TIMEOUT: Vault created on-chain but not yet indexed.");
         if (result.createdVaultId) {
-          alert("Transaction confirmed! Your vault is opening now.");
+          setNotice({ type: "success", message: "Transaction confirmed. Your vault is opening now." });
         } else {
-          alert("Transaction confirmed! Your vault is being created. Please wait a few moments and refresh the page.");
+          setNotice({ type: "success", message: "Transaction confirmed. Your vault may take a few moments to appear." });
         }
       }
 
     } catch (e: any) {
-      console.error("[handleOpenVault] FAILED: Critical Error in Flow:", e);
       const msg = e?.message || "Unknown error occurred.";
-      alert(`Initialization Failed: ${msg}`);
+      setNotice({ type: "error", message: `Initialization failed: ${msg}` });
     } finally {
       setIsProcessing(false);
       setProcessingStatus("");
       txLock.current = false;
-      console.log("[handleOpenVault] FINISHED: Flow ended, lock released.");
     }
-  }, [account, openVault, fetchVault, hydrateCreatedVault, syncCreatedVault, isProcessing, router]);
+  }, [account, openVault, fetchVault, hydrateCreatedVault, syncCreatedVault, isProcessing, router, fetchWalletBalance, fetchPending, fetchHistory]);
 
-  /**
-   * Authoritative Flow: handleDeposit
-   */
   const handleDeposit = useCallback(async () => {
-    if (!account || !vault || !pending || isProcessing || txLock.current) return;
+    if (!account || !vault || isProcessing || txLock.current) return;
+    if (!depositAmountMist || !hasDepositBalance) {
+      setNotice({ type: "error", message: "Insufficient wallet balance." });
+      return;
+    }
+
+    const previousVault = currentVaultRef.current;
+    const previousWalletBalance = BigInt(walletBalanceMist || "0");
+    const sourceLabel = pendingAmount > 0n && depositAmountMist === pendingAmount ? "Pending round-ups" : "Manual deposit";
 
     setIsProcessing(true);
-    setProcessingStatus("Syncing your savings...");
+    setProcessingStatus("Confirming deposit...");
+    setNotice(null);
     txLock.current = true;
 
     try {
-      console.log("[Dashboard] Phase: Deposit Started");
-      const result = await deposit(vault.vault_id, pending.pendingMist, "Bulk deposit");
-      console.log("[Dashboard] Phase: Deposit Success. Digest:", result.digest);
+      const result = await deposit(account.address, vault.vault_id, depositAmountMist.toString(), sourceLabel);
+      const occurredAt = new Date().toISOString();
+      const expectedBalance = (BigInt(previousVault?.balance || "0") + depositAmountMist).toString();
+      const expectedTotalDeposited = (BigInt(previousVault?.total_deposited || "0") + depositAmountMist).toString();
+      const expectedDepositCount = Number(previousVault?.deposit_count || 0) + 1;
+      const expectedTotalTransactions = Number(previousVault?.total_transactions || 0) + 1;
+      const optimisticTransaction = {
+        type: "Deposit",
+        amount_mist: depositAmountMist.toString(),
+        occurred_at: occurredAt,
+        tx_digest: result.digest,
+        status: "Confirmed",
+        source_label: sourceLabel,
+      };
+
+      setVault((current: any) => current ? {
+        ...current,
+        balance: expectedBalance,
+        total_deposited: expectedTotalDeposited,
+        total_profit_loss: (
+          BigInt(expectedBalance) +
+          BigInt(current.total_withdrawn || "0") -
+          BigInt(expectedTotalDeposited)
+        ).toString(),
+        deposit_count: expectedDepositCount,
+        total_transactions: expectedTotalTransactions,
+        last_transaction_at: occurredAt,
+      } : current);
+
+      setWalletBalanceMist((previousWalletBalance - depositAmountMist > 0n ? previousWalletBalance - depositAmountMist : 0n).toString());
+      setHistory((current) => current.some((item) => item.tx_digest === result.digest) ? current : [optimisticTransaction, ...current]);
+      setDepositAmount("");
+      depositEditedRef.current = false;
+      if (sourceLabel === "Pending round-ups") {
+        setPending({ pendingMist: "0", sinceLastDeposit: 0 });
+      }
 
       confetti({
         particleCount: 200,
@@ -439,37 +459,52 @@ export default function Dashboard() {
       });
 
       setProcessingStatus("Updating ledger...");
-      setTimeout(() => {
-        fetchVault();
-        fetchPending();
-        fetchHistory();
-        console.log("[Dashboard] Phase: Ledger Updated.");
-      }, 2000);
+      await refreshDashboard({ attempts: 4, waitMs: 2000 });
+      setVault((current: any) => {
+        if (!current) return current;
+        const ensuredBalance = BigInt(current.balance || "0") >= BigInt(expectedBalance) ? current.balance : expectedBalance;
+        const ensuredTotalDeposited = BigInt(current.total_deposited || "0") >= BigInt(expectedTotalDeposited)
+          ? current.total_deposited
+          : expectedTotalDeposited;
+        const ensuredDepositCount = Math.max(Number(current.deposit_count || 0), expectedDepositCount);
+        const ensuredTotalTransactions = Math.max(Number(current.total_transactions || 0), expectedTotalTransactions);
+
+        return {
+          ...current,
+          balance: ensuredBalance,
+          total_deposited: ensuredTotalDeposited,
+          total_profit_loss: (
+            BigInt(ensuredBalance) +
+            BigInt(current.total_withdrawn || "0") -
+            BigInt(ensuredTotalDeposited)
+          ).toString(),
+          deposit_count: ensuredDepositCount,
+          total_transactions: ensuredTotalTransactions,
+          last_transaction_at: current.last_transaction_at || occurredAt,
+        };
+      });
+      setHistory((current) => current.some((item) => item.tx_digest === result.digest) ? current : [optimisticTransaction, ...current]);
+      setNotice({ type: "success", message: "Deposit confirmed and dashboard updated." });
     } catch (e: any) {
-      console.error("[Dashboard] Deposit Flow Error:", e);
-      alert(`Deposit Error: ${e?.message || "Unknown error"}`);
+      setNotice({ type: "error", message: `Deposit failed: ${e?.message || "Unknown error"}` });
     } finally {
       setIsProcessing(false);
       setProcessingStatus("");
       txLock.current = false;
     }
-  }, [account, vault, pending, deposit, fetchVault, fetchPending, fetchHistory, isProcessing]);
+  }, [account, vault, pendingAmount, walletBalanceMist, depositAmountMist, deposit, refreshDashboard, hasDepositBalance, isProcessing]);
 
-  /**
-   * Authoritative Flow: handleWithdraw
-   */
   const handleWithdraw = useCallback(async () => {
     if (!account || !vault || !withdrawAmount || isProcessing || txLock.current) return;
 
     setIsProcessing(true);
     setProcessingStatus("Authenticating withdrawal...");
+    setNotice(null);
     txLock.current = true;
 
     try {
-      console.log("[Dashboard] Phase: Withdrawal Started");
       const amountMist = Math.round(parseFloat(withdrawAmount) * 1_000_000_000).toString();
-      const result = await withdraw(vault.vault_id, amountMist);
-      console.log("[Dashboard] Phase: Withdrawal Success. Digest:", result.digest);
+      await withdraw(vault.vault_id, amountMist);
 
       confetti({
         particleCount: 80,
@@ -480,25 +515,21 @@ export default function Dashboard() {
 
       setWithdrawAmount("");
       setProcessingStatus("Finalizing transfer...");
-      setTimeout(() => {
-        fetchVault();
-        console.log("[Dashboard] Phase: Transfer Complete.");
-      }, 2000);
+      await refreshDashboard({ attempts: 4, waitMs: 2000 });
+      setNotice({ type: "success", message: "Withdrawal confirmed and dashboard updated." });
     } catch (e: any) {
-      console.error("[Dashboard] Withdrawal Flow Error:", e);
-      alert(`Withdrawal Error: ${e?.message || "Unknown error"}`);
+      setNotice({ type: "error", message: `Withdrawal failed: ${e?.message || "Unknown error"}` });
     } finally {
       setIsProcessing(false);
       setProcessingStatus("");
       txLock.current = false;
     }
-  }, [account, vault, withdrawAmount, withdraw, fetchVault, isProcessing]);
+  }, [account, vault, withdrawAmount, withdraw, refreshDashboard, isProcessing]);
 
   const handleSeedDemo = useCallback(async () => {
     if (!account || seeding) return;
     setSeeding(true);
     try {
-      console.log("[Dashboard] Triggering demo seeds...");
       await fetch(`${API_URL}/api/roundups/seed-demo`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -512,17 +543,13 @@ export default function Dashboard() {
         colors: ["#86C454", "#9FD66B", "#E8B865"]
       });
     } catch (e) {
-      console.error("[Dashboard] Demo seed failed:", e);
+      setNotice({ type: "error", message: "Demo round-ups could not be seeded." });
     } finally {
       setSeeding(false);
     }
   }, [account, seeding, fetchPending]);
 
-  /**
-   * Main Lifecycle Management
-   */
   useEffect(() => {
-    // Safety reset when switching wallets
     setIsProcessing(false);
     txLock.current = false;
     setProcessingStatus("");
@@ -534,64 +561,47 @@ export default function Dashboard() {
         existingVault.owner.toLowerCase() === account.address.toLowerCase()
       );
 
-      console.log("[Dashboard] Phase: Account Connected. Root:", account.address);
-      traceDashboard("Account connected", {
-        owner: account.address,
-        preserveExisting,
-        existingVaultId: preserveExisting ? existingVault.vault_id : null,
-      });
       setLoading(true);
       if (!preserveExisting) {
-        traceDashboard("Vault state update started", {
-          source: "account-change",
-          owner: account.address,
-        });
         setVault(null);
       }
 
       const init = async () => {
         try {
-          const fetchState = await fetchVault({ preserveExisting });
-          traceDashboard("Initial vault fetch completed", {
-            owner: account.address,
-            status: fetchState,
-            preserveExisting,
-          });
-          await Promise.all([fetchPending(), fetchHistory()]);
-        } catch (err) {
-          console.error("[Dashboard] Initial fetch critical failure:", err);
-          traceDashboard("Initial load failed", {
-            owner: account.address,
-            reason: err instanceof Error ? err.message : String(err),
-          });
+          await Promise.all([
+            fetchWalletBalance(),
+            fetchVault({ preserveExisting }),
+            fetchPending(),
+            fetchHistory(),
+          ]);
+        } catch {
+          setNotice({ type: "error", message: "Dashboard data could not be loaded." });
         } finally {
           setLoading(false);
-          traceDashboard("Initial load completed", {
-            owner: account.address,
-          });
-          console.log("[Dashboard] Phase: Initial Load Complete.");
         }
       };
 
       init();
     } else {
       setLoading(false);
-      traceDashboard("No account available");
       setVault(null);
       setHistory([]);
+      setWalletBalanceMist("0");
+      setWalletBalanceError("");
       setLoadError("");
+      setNotice(null);
     }
-  }, [account?.address, fetchVault, fetchPending, fetchHistory]);
+  }, [account?.address, fetchVault, fetchPending, fetchHistory, fetchWalletBalance]);
 
-  // Session recovery check
   useEffect(() => {
     if (!isConnected && !account?.address) {
-      console.log("[Dashboard] Phase: Wallet Disconnected.");
-      traceDashboard("Wallet disconnected");
       setVault(null);
       setPending(null);
       setHistory([]);
+      setWalletBalanceMist("0");
+      setWalletBalanceError("");
       setLoadError("");
+      setNotice(null);
     }
   }, [account?.address, isConnected]);
 
@@ -627,7 +637,6 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-pine-950 text-mist p-4 md:p-8">
-      {/* Production Transaction Overlay */}
       {isProcessing && (
         <div className="fixed inset-0 bg-pine-950/90 backdrop-blur-md z-[100] flex items-center justify-center transition-all">
           <div className="bg-pine-900 border border-pine-800 p-10 rounded-[2.5rem] flex flex-col items-center gap-8 max-w-sm text-center shadow-[0_0_50px_rgba(0,0,0,0.5)]">
@@ -664,6 +673,20 @@ export default function Dashboard() {
           </div>
         </header>
 
+        {notice && (
+          <div
+            className={`rounded-2xl border px-5 py-4 text-sm font-bold ${
+              notice.type === "success"
+                ? "border-sprout-400/20 bg-sprout-400/10 text-sprout-400"
+                : notice.type === "error"
+                  ? "border-harvest-400/20 bg-harvest-400/10 text-harvest-400"
+                  : "border-pine-700 bg-pine-900/60 text-mist/60"
+            }`}
+          >
+            {notice.message}
+          </div>
+        )}
+
         {!vault ? (
           <div className="bg-pine-900/40 border border-pine-800 rounded-[3.5rem] p-16 flex flex-col items-center space-y-10 text-center max-w-2xl mx-auto relative overflow-hidden group">
             <div className="absolute inset-0 bg-gradient-to-b from-sprout-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-1000 pointer-events-none" />
@@ -687,54 +710,56 @@ export default function Dashboard() {
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-1000">
             {/* Main Stats */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-              <div className="lg:col-span-12 xl:col-span-5 bg-pine-900/40 border border-pine-800 rounded-[2.5rem] p-10 flex flex-col items-center justify-center relative overflow-hidden group">
+              <div className="lg:col-span-12 xl:col-span-4 bg-pine-900/40 border border-pine-800 rounded-[2.5rem] p-8 md:p-10 flex flex-col items-center justify-center relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-8 flex items-center gap-3">
                   <div className="text-[10px] font-bold text-sprout-400 uppercase tracking-widest bg-sprout-400/10 px-3 py-1 rounded-full border border-sprout-400/20">
-                    Vault Active
+                    {vault.status || "Active"}
                   </div>
                   <div className="w-2 h-2 bg-sprout-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(134,196,84,0.5)]" />
                 </div>
-                <SproutGrowth totalDepositedSui={Number(vault.balance) / 1_000_000_000} size={260} />
+                <SproutGrowth totalDepositedSui={Number(vault.balance) / MIST_PER_SUI} size={260} />
                 <div className="mt-8 text-center relative z-10">
-                  <div className="text-mist/30 text-[10px] font-bold uppercase tracking-[0.3em]">Total Balance</div>
-                  <div className="text-7xl font-display font-bold text-harvest-400 mt-4 tabular-nums flex items-baseline justify-center">
-                    {(Number(vault.balance) / 1_000_000_000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <div className="text-mist/30 text-[10px] font-bold uppercase tracking-[0.3em]">Current Vault Balance</div>
+                  <div className="text-5xl md:text-6xl font-display font-bold text-harvest-400 mt-4 tabular-nums flex items-baseline justify-center">
+                    {formatSui(vault.balance)}
                     <span className="text-xl ml-3 text-harvest-400/40 font-bold">SUI</span>
                   </div>
                 </div>
               </div>
 
-              <div className="lg:col-span-12 xl:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div className="bg-pine-900/60 p-8 rounded-[2.5rem] border border-pine-800 flex flex-col justify-between hover:border-pine-700 transition-all group">
-                  <div className="text-mist/30 text-[10px] font-bold uppercase tracking-widest">Total Seeded</div>
-                  <div className="text-5xl font-display font-bold text-mist mt-6 tabular-nums flex items-baseline">
-                    {(Number(vault.total_deposited) / 1_000_000_000).toFixed(2)}
-                    <span className="text-sm ml-2 text-mist/20 font-bold">SUI</span>
+              <div className="lg:col-span-12 xl:col-span-8 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+                {[
+                  ["Wallet Balance", walletBalanceLoading ? "Refreshing..." : `${formatSui(walletBalanceMist)} SUI`],
+                  ["Total Deposited", `${formatSui(vault.total_deposited)} SUI`],
+                  ["Total Withdrawn", `${formatSui(vault.total_withdrawn)} SUI`],
+                  ["Total Profit/Loss", `${formatSui(vault.total_profit_loss)} SUI`],
+                  ["Number of Deposits", vault.deposit_count ?? 0],
+                  ["Number of Withdrawals", vault.withdrawal_count ?? 0],
+                  ["Total Transactions", vault.total_transactions ?? 0],
+                  ["Vault Created Date", formatDate(vault.opened_at)],
+                  ["Last Transaction Date", formatDate(vault.last_transaction_at)],
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-pine-900/60 p-6 rounded-[2rem] border border-pine-800 flex flex-col justify-between hover:border-pine-700 transition-all min-h-32">
+                    <div className="text-mist/30 text-[10px] font-bold uppercase tracking-widest">{label}</div>
+                    <div className="text-2xl font-display font-bold text-mist mt-5 tabular-nums break-words">{value}</div>
                   </div>
-                </div>
-                <div className="bg-pine-900/60 p-8 rounded-[2.5rem] border border-pine-800 flex flex-col justify-between hover:border-pine-700 transition-all group">
-                  <div className="text-mist/30 text-[10px] font-bold uppercase tracking-widest">Savings Events</div>
-                  <div className="text-5xl font-display font-bold text-mist mt-6 tabular-nums">
-                    {vault.deposit_count}
-                    <span className="text-sm ml-2 text-mist/20 font-bold uppercase tracking-widest">Tx</span>
-                  </div>
-                </div>
-                <div className="sm:col-span-2 bg-sprout-500/5 p-10 rounded-[2.5rem] border border-sprout-500/10 flex flex-col justify-between relative overflow-hidden group hover:border-sprout-500/30 transition-all">
-                  <div className="absolute right-[-5%] top-[-50%] w-64 h-64 bg-sprout-500/10 blur-[100px] rounded-full group-hover:scale-110 transition-transform duration-1000" />
+                ))}
+                <div className="sm:col-span-2 xl:col-span-3 bg-sprout-500/5 p-8 md:p-10 rounded-[2.5rem] border border-sprout-500/10 flex flex-col justify-between relative overflow-hidden group hover:border-sprout-500/30 transition-all">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center relative z-10 gap-6">
                     <div className="space-y-4">
                       <div className="text-sprout-400/60 text-[10px] font-bold uppercase tracking-widest">Accumulated Spare Change</div>
-                      <div className="text-6xl font-display font-bold text-sprout-400 tabular-nums flex items-baseline">
-                        {(Number(pending?.pendingMist || 0) / 1_000_000_000).toFixed(4)}
+                      <div className="text-4xl md:text-5xl font-display font-bold text-sprout-400 tabular-nums flex items-baseline">
+                        {formatSui(pendingMist, 4)}
                         <span className="text-lg ml-3 opacity-40 font-bold">SUI</span>
                       </div>
+                      {walletBalanceError && <p className="text-xs text-harvest-400 font-bold">{walletBalanceError}</p>}
                     </div>
                     <div className="flex flex-col items-end gap-3">
                       <div className="bg-sprout-500/10 px-6 py-3 rounded-full text-sprout-400 text-xs font-bold border border-sprout-500/20 whitespace-nowrap">
                         {pending?.sinceLastDeposit || 0} PENDING ACTIONS
                       </div>
                       <div className="text-[10px] text-mist/20 font-bold uppercase tracking-widest pr-2">
-                        Assets: SUI, USDC, CETUS
+                        Vault Status: {vault.status || "Active"}
                       </div>
                     </div>
                   </div>
@@ -763,34 +788,69 @@ export default function Dashboard() {
               <div className="min-h-[400px]">
                 {activeTab === "overview" && (
                   <div className="animate-in fade-in duration-700">
-                    {Number(pending?.pendingMist || 0) > 0 ? (
-                      <div className="bg-pine-900/20 p-14 rounded-[3rem] border border-pine-800/40 flex flex-col md:flex-row items-center justify-between gap-12 group">
-                        <div className="space-y-3 text-center md:text-left">
+                    <div className="bg-pine-900/20 p-8 md:p-14 rounded-[3rem] border border-pine-800/40 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-10 group">
+                      <div className="space-y-6 text-center xl:text-left flex-1">
+                        <div className="space-y-3">
                           <h3 className="text-4xl font-display font-bold text-mist">Flush to Vault</h3>
                           <p className="text-mist/40 text-lg max-w-sm">
-                            Move your local spare change onto the blockchain to start earning rewards.
+                            Move available SUI from your wallet into your on-chain vault.
                           </p>
                         </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl">
+                          <div className="bg-pine-950/50 p-5 rounded-2xl border border-pine-800">
+                            <div className="text-[10px] text-mist/20 font-bold uppercase tracking-widest">Available Wallet</div>
+                            <div className="text-xl font-display font-bold text-mist mt-2 tabular-nums">{formatSui(walletBalanceMist, 4)} SUI</div>
+                          </div>
+                          <div className="bg-pine-950/50 p-5 rounded-2xl border border-pine-800">
+                            <div className="text-[10px] text-mist/20 font-bold uppercase tracking-widest">Max Deposit</div>
+                            <div className="text-xl font-display font-bold text-sprout-400 mt-2 tabular-nums">{formatSui(maxDepositMist.toString(), 4)} SUI</div>
+                          </div>
+                          <div className="bg-pine-950/50 p-5 rounded-2xl border border-pine-800">
+                            <div className="text-[10px] text-mist/20 font-bold uppercase tracking-widest">Pending Round-Ups</div>
+                            <div className="text-xl font-display font-bold text-harvest-400 mt-2 tabular-nums">{formatSui(pendingMist, 4)} SUI</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="w-full xl:w-[28rem] space-y-4">
+                        <div className="relative group">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.000000001"
+                            placeholder="0.00"
+                            value={depositAmount}
+                            onChange={(e) => {
+                              depositEditedRef.current = true;
+                              setDepositAmount(e.target.value);
+                            }}
+                            className="w-full bg-pine-950/50 border-2 border-pine-800/50 rounded-3xl p-7 text-4xl font-display focus:outline-none focus:border-sprout-400/50 transition-all pl-24 pr-24 tabular-nums text-mist"
+                          />
+                          <div className="absolute left-8 top-1/2 -translate-y-1/2 text-sprout-400/50 font-bold text-xl uppercase font-display">Sui</div>
+                          <button
+                            onClick={() => {
+                              depositEditedRef.current = true;
+                              setDepositAmount(maxDepositDisplay);
+                            }}
+                            disabled={maxDepositMist <= 0n || isProcessing}
+                            className="absolute right-7 top-1/2 -translate-y-1/2 bg-pine-900 hover:bg-pine-800 px-4 py-2 rounded-xl text-mist/30 hover:text-sprout-400 text-[10px] font-bold uppercase tracking-widest transition-all border border-pine-800 disabled:opacity-40"
+                          >
+                            Max
+                          </button>
+                        </div>
+                        <p className={`min-h-5 text-sm font-bold ${depositValidationError ? "text-harvest-400" : "text-mist/30"}`}>
+                          {depositValidationError || `Available to deposit: ${formatSui(maxDepositMist.toString(), 4)} SUI`}
+                        </p>
                         <button
                           onClick={handleDeposit}
-                          disabled={isProcessing}
-                          className="bg-sprout-500 hover:bg-sprout-400 text-pine-950 font-bold px-14 py-6 rounded-2xl flex items-center gap-4 shadow-[0_20px_40px_rgba(134,196,84,0.1)] hover:shadow-[0_25px_50px_rgba(134,196,84,0.2)] active:scale-95 transition-all text-xl"
+                          disabled={!canDeposit}
+                          className="w-full bg-sprout-500 hover:bg-sprout-400 text-pine-950 font-bold px-10 py-6 rounded-2xl flex items-center justify-center gap-4 shadow-[0_20px_40px_rgba(134,196,84,0.1)] hover:shadow-[0_25px_50px_rgba(134,196,84,0.2)] active:scale-95 transition-all text-xl disabled:opacity-50 disabled:hover:bg-sprout-500"
                         >
-                          <ArrowUpRight className="w-7 h-7" />
-                          Deposit Now
+                          {isProcessing ? <Loader2 className="w-7 h-7 animate-spin" /> : <ArrowUpRight className="w-7 h-7" />}
+                          {isProcessing ? "Depositing..." : "Deposit Now"}
                         </button>
                       </div>
-                    ) : (
-                      <div className="bg-pine-900/5 p-24 rounded-[3rem] border border-dashed border-pine-800/30 flex flex-col items-center text-center space-y-8">
-                        <div className="w-24 h-24 bg-pine-900/40 rounded-full flex items-center justify-center border border-pine-800/50 shadow-inner">
-                          <CheckCircle2 className="text-pine-800/40 w-12 h-12" />
-                        </div>
-                        <div className="space-y-3">
-                          <div className="text-3xl font-display font-bold text-mist/20 uppercase tracking-widest">Vault Synchronized</div>
-                          <p className="text-mist/10 text-sm max-w-xs mx-auto font-medium">All savings have been secured in your on-chain vault.</p>
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 )}
 
@@ -800,30 +860,49 @@ export default function Dashboard() {
                       <table className="w-full text-left">
                         <thead>
                           <tr className="bg-pine-900/40 border-b border-pine-800/60">
-                            <th className="px-12 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold">Transaction Source</th>
-                            <th className="px-12 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold text-right">Amount</th>
-                            <th className="px-12 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold text-right">Execution Date</th>
+                            <th className="px-6 md:px-10 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold">Type</th>
+                            <th className="px-6 md:px-10 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold text-right">Amount</th>
+                            <th className="px-6 md:px-10 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold text-right">Date</th>
+                            <th className="px-6 md:px-10 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold">Transaction Hash</th>
+                            <th className="px-6 md:px-10 py-6 text-[10px] uppercase tracking-[0.25em] text-mist/20 font-bold text-right">Status</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-pine-800/20">
                           {history.length > 0 ? history.map((item, idx) => (
                             <tr key={idx} className="hover:bg-sprout-500/[0.02] transition-colors group">
-                              <td className="px-12 py-6">
-                                <div className="text-mist/70 font-bold text-sm tracking-wide">{item.source_label}</div>
-                                <div className="text-[10px] text-mist/20 uppercase font-bold mt-1">Confirmed Layer 1</div>
+                              <td className="px-6 md:px-10 py-6">
+                                <div className="text-mist/70 font-bold text-sm tracking-wide">{item.type}</div>
+                                <div className="text-[10px] text-mist/20 uppercase font-bold mt-1">{item.source_label}</div>
                               </td>
-                              <td className="px-12 py-6 text-right">
-                                <div className="text-sprout-400 font-bold tabular-nums text-lg">{(Number(item.amount_mist) / 1_000_000_000).toFixed(4)}</div>
+                              <td className="px-6 md:px-10 py-6 text-right">
+                                <div className={`font-bold tabular-nums text-lg ${item.type === "Withdrawal" ? "text-harvest-400" : "text-sprout-400"}`}>
+                                  {formatSui(item.amount_mist, 4)}
+                                </div>
                                 <div className="text-[9px] text-sprout-400/30 font-bold uppercase tracking-widest">SUI Native</div>
                               </td>
-                              <td className="px-12 py-6 text-right tabular-nums text-mist/40 font-medium text-xs">{new Date(item.deposited_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                              <td className="px-6 md:px-10 py-6 text-right tabular-nums text-mist/40 font-medium text-xs">{formatDate(item.occurred_at)}</td>
+                              <td className="px-6 md:px-10 py-6">
+                                <a
+                                  href={getExplorerTxUrl(item.tx_digest)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-sprout-400/80 hover:text-sprout-300 font-mono text-xs break-all"
+                                >
+                                  {item.tx_digest?.slice(0, 12)}...{item.tx_digest?.slice(-8)}
+                                </a>
+                              </td>
+                              <td className="px-6 md:px-10 py-6 text-right">
+                                <span className="text-[10px] font-bold uppercase tracking-widest text-sprout-400 bg-sprout-400/10 border border-sprout-400/20 rounded-full px-3 py-1">
+                                  {item.status || "Confirmed"}
+                                </span>
+                              </td>
                             </tr>
                           )) : (
                             <tr>
-                              <td colSpan={3} className="px-12 py-24 text-center">
+                              <td colSpan={5} className="px-12 py-24 text-center">
                                 <div className="flex flex-col items-center gap-6 opacity-10">
                                   <History className="w-16 h-16" />
-                                  <div className="font-bold uppercase tracking-[0.3em] text-xs">No Deposit History Record</div>
+                                  <div className="font-bold uppercase tracking-[0.3em] text-xs">No Transactions Yet</div>
                                 </div>
                               </td>
                             </tr>

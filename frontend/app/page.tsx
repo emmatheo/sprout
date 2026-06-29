@@ -13,12 +13,6 @@ export default function Home() {
 
   useEffect(() => {
     if (account?.address) {
-      console.log("[Landing] Wallet connected, redirecting to dashboard...");
-      console.log("[LandingFlow] Dashboard navigation started", {
-        href: "/dashboard",
-        source: "landing-auto-redirect",
-        wallet: account.address,
-      });
       router.push("/dashboard");
     }
   }, [account, router]);
@@ -87,7 +81,7 @@ export default function Home() {
               <Coins className="text-harvest-400 w-10 h-10" />
               <h3 className="text-2xl font-display font-bold text-harvest-400">Deposit with whatever you're holding</h3>
               <p className="text-mist/70">
-                Hold USDC? Our DeepBook integration performs atomic swaps to SUI right before your deposit.
+                The dashboard checks your available SUI balance before every vault deposit.
               </p>
             </div>
             <div className="bg-pine-900/60 p-10 rounded-3xl border border-pine-800 space-y-4">

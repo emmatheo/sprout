@@ -2,37 +2,27 @@
 
 ## What it is in one sentence
 Sprout automatically rounds up every purchase to the next whole unit and
-invests the spare change into a personal onchain SUI vault — no lump sum,
-no crypto knowledge, no wallet install required to start.
+invests the spare change into a personal onchain SUI vault.
 
 ## Why Sui specifically
 
 | Product requirement | Sui primitive used | Why it can't be faked elsewhere |
 |---|---|---|
-| New users onboard without installing anything | zkLogin via Enoki | Google OAuth → ZK proof → real Sui address. No seed phrase, no extension |
 | Existing Sui wallet users connect normally | wallet-standard, same dapp-kit `WalletProvider` | Both paths registered in one modal; identical signing code from both |
-| Users never pay gas themselves | Sponsored transactions via Enoki | Gas station covers vault open + first N deposits; backend allowlists only Sprout's own Move calls |
 | Thousands of users depositing simultaneously never contend | Owned `Vault` objects, not a shared pool | Owned objects skip consensus ordering entirely — 1M concurrent deposits have no shared-state bottleneck |
 | Full deposit history lives on the object itself | Dynamic fields keyed by `deposit_count` | Each log entry is a dynamic field on the user's own `Vault` — no separate contract, no off-chain trust |
-| Deposit with any coin the user holds | DeepBook composed inside PTB | Swap + deposit = one atomic transaction. If the swap fails, the deposit never happens |
 | Savings record is portable, unfakeable, non-transferable | `MilestoneBadge` soulbound (no `store`) | Move's type system: no `store` means the contract is literally the only code that can ever move this object |
-| Statement / export doesn't depend on Sprout's server | Walrus blob storage | Statement JSON uploaded to Walrus; user gets a direct aggregator URL — Sprout's backend can go down, the statement is still there |
-| User's linked spending-source identifier stays private | Seal + Walrus | Encrypted on Walrus, policy enforced by `spending_source::seal_approve_source` — only the vault owner can decrypt |
 
 ## System diagram (described)
 
 ```
 User's browser
   │
-  ├─ New user: Google OAuth → Enoki/zkLogin → Sui address (no install)
-  ├─ Existing user: Sui Wallet / Suiet / etc → wallet-standard connect
+  ├─ Sui Wallet / Suiet / etc → wallet-standard connect
   │
   ▼
 Next.js frontend
-  │  useSponsoredTransaction hook
-  │  → POST /api/sponsor (backend signs gas via Enoki secret key)
-  │  → User signs intent (wallet-standard signTransaction)
-  │  → POST /api/sponsor/execute
+  │  User signs transactions with the connected wallet
   │
   │  PTB examples:
   │   open_vault: vault::open_vault(clock)
@@ -55,15 +45,7 @@ Chain events → Event indexer (polling loop, separate process)
                              ├─ pending_roundups (purchase feed accumulator)
                              └─ withdrawals
 
-Walrus:  savings statement JSON blobs (user-downloadable permanent export)
-Seal:    encrypted spending-source identifier (only vault owner can decrypt)
 ```
-
-## Sponsorship policy
-The backend's `/api/sponsor` endpoint allowlists four Move call targets:
-`vault::open_vault`, `vault::deposit`, `vault::withdraw`,
-`badge::claim_milestone_badge`. Any other target is rejected with a 403
-before Enoki is ever called, so the gas station can't be abused.
 
 Revenue model: 0.5% fee on withdrawal, collected by the protocol treasury,
 enforced by the contract itself — not by the backend.
